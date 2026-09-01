@@ -15,18 +15,14 @@ enum class SpxState {
     READING_ROUTE,
     SCANNING_PACKAGES,
     WAITING_CONTENT,
-    PACKAGE_DETECTED,
     IMPORT_COMPLETE,
     RETURNING_TO_COPILOT,
     ROUTE_READY
 }
 
-data class RotaImportada(
-    val at: String? = null,
-    val dataCarregamento: String? = null,
-    val totalEsperado: Int? = null,
-    val pedidosImportados: Int = 0,
-    val pedidos: Set<String> = emptySet()
+data class SpxPackage(
+    val code: String,
+    val address: String? = null
 )
 
 object SpxSessionState {
@@ -37,11 +33,11 @@ object SpxSessionState {
     val state: StateFlow<SpxState> =
         _state.asStateFlow()
 
-    private val _packageName =
-        MutableStateFlow<String?>(null)
+    private val _statusMessage =
+        MutableStateFlow("Aguardando SPX")
 
-    val packageName: StateFlow<String?> =
-        _packageName.asStateFlow()
+    val statusMessage: StateFlow<String> =
+        _statusMessage.asStateFlow()
 
     private val _atCode =
         MutableStateFlow<String?>(null)
@@ -61,17 +57,13 @@ object SpxSessionState {
     val totalEsperado: StateFlow<Int?> =
         _totalEsperado.asStateFlow()
 
-    private val _brCode =
-        MutableStateFlow<String?>(null)
+    private val _packages =
+        MutableStateFlow<Map<String, SpxPackage>>(
+            linkedMapOf()
+        )
 
-    val brCode: StateFlow<String?> =
-        _brCode.asStateFlow()
-
-    private val _packageCodes =
-        MutableStateFlow<Set<String>>(emptySet())
-
-    val packageCodes: StateFlow<Set<String>> =
-        _packageCodes.asStateFlow()
+    val packages: StateFlow<Map<String, SpxPackage>> =
+        _packages.asStateFlow()
 
     private val _packageCount =
         MutableStateFlow(0)
@@ -79,29 +71,10 @@ object SpxSessionState {
     val packageCount: StateFlow<Int> =
         _packageCount.asStateFlow()
 
-    private val _statusMessage =
-        MutableStateFlow("Aguardando SPX")
-
-    val statusMessage: StateFlow<String> =
-        _statusMessage.asStateFlow()
-
-    /*
-     * Este estado é usado para mandar o MainActivity
-     * diretamente para a tela de gestão.
-     *
-     * Isso resolve o caso em que o MainActivity já estava
-     * aberto e o Intent do serviço não recriava a tela.
-     */
-    private val _openManagement =
-        MutableStateFlow(false)
-
-    val openManagement: StateFlow<Boolean> =
-        _openManagement.asStateFlow()
-
     fun updateState(
-        newState: SpxState
+        state: SpxState
     ) {
-        _state.value = newState
+        _state.value = state
     }
 
     fun updateMessage(
@@ -110,35 +83,20 @@ object SpxSessionState {
         _statusMessage.value = message
     }
 
-    fun updatePackageName(
-        packageName: String
-    ) {
-        _packageName.value =
-            packageName
-    }
-
     fun updateAtCode(
         at: String?
     ) {
-        if (
-            !at.isNullOrBlank()
-        ) {
-
+        if (!at.isNullOrBlank()) {
             _atCode.value =
-                at
-                    .trim()
-                    .uppercase()
+                at.trim().uppercase()
         }
     }
 
     fun updateDataCarregamento(
         data: String?
     ) {
-        if (
-            !data.isNullOrBlank()
-        ) {
-            _dataCarregamento.value =
-                data
+        if (!data.isNullOrBlank()) {
+            _dataCarregamento.value = data
         }
     }
 
@@ -147,7 +105,8 @@ object SpxSessionState {
     ) {
         if (
             total == null ||
-            total <= 0
+            total <= 0 ||
+            total > 1000
         ) {
             return
         }
@@ -155,10 +114,6 @@ object SpxSessionState {
         val atual =
             _totalEsperado.value
 
-        /*
-         * Não deixa um contador pequeno lido posteriormente
-         * substituir um total maior já identificado.
-         */
         if (
             atual == null ||
             total > atual
@@ -168,99 +123,70 @@ object SpxSessionState {
         }
     }
 
-    fun addPackageCode(
-        br: String
-    ): Boolean {
-
-        val codigo =
-            br
-                .trim()
-                .uppercase()
-
-        if (
-            codigo.isBlank()
-        ) {
-            return false
-        }
-
-        val atual =
-            _packageCodes.value
-
-        if (
-            codigo in atual
-        ) {
-            return false
-        }
-
-        val novo =
-            LinkedHashSet<String>()
-
-        novo.addAll(
-            atual
-        )
-
-        novo.add(
-            codigo
-        )
-
-        _packageCodes.value =
-            novo
-
-        _packageCount.value =
-            novo.size
-
-        _brCode.value =
-            codigo
-
-        return true
-    }
-
-    fun addPackageCodes(
-        codes: Collection<String>
+    fun addOrUpdatePackages(
+        encontrados: Map<String, String?>
     ): Int {
 
-        var novos =
-            0
+        val atual =
+            LinkedHashMap(
+                _packages.value
+            )
 
-        codes.forEach { code ->
+        var novos = 0
 
-            if (
-                addPackageCode(code)
-            ) {
+        encontrados.forEach {
+                (codigoOriginal, endereco) ->
+
+            val codigo =
+                codigoOriginal
+                    .trim()
+                    .uppercase()
+
+            if (codigo.isBlank()) {
+                return@forEach
+            }
+
+            val existente =
+                atual[codigo]
+
+            if (existente == null) {
+
+                atual[codigo] =
+                    SpxPackage(
+                        code = codigo,
+                        address = endereco
+                    )
+
                 novos++
+
+            } else if (
+                existente.address.isNullOrBlank() &&
+                !endereco.isNullOrBlank()
+            ) {
+
+                atual[codigo] =
+                    existente.copy(
+                        address = endereco
+                    )
             }
         }
 
+        _packages.value =
+            atual
+
+        _packageCount.value =
+            atual.size
+
         return novos
-    }
-
-    fun requestOpenManagement() {
-
-        _openManagement.value =
-            true
-    }
-
-    fun clearOpenManagement() {
-
-        _openManagement.value =
-            false
-    }
-
-    fun getRotaAtual(): RotaImportada {
-
-        return RotaImportada(
-            at = _atCode.value,
-            dataCarregamento = _dataCarregamento.value,
-            totalEsperado = _totalEsperado.value,
-            pedidosImportados = _packageCount.value,
-            pedidos = _packageCodes.value
-        )
     }
 
     fun resetRoute() {
 
         _state.value =
             SpxState.UNKNOWN
+
+        _statusMessage.value =
+            "Preparando importação..."
 
         _atCode.value =
             null
@@ -271,19 +197,10 @@ object SpxSessionState {
         _totalEsperado.value =
             null
 
-        _brCode.value =
-            null
-
-        _packageCodes.value =
-            emptySet()
+        _packages.value =
+            linkedMapOf()
 
         _packageCount.value =
             0
-
-        _statusMessage.value =
-            "Preparando importação..."
-
-        _openManagement.value =
-            false
     }
 }

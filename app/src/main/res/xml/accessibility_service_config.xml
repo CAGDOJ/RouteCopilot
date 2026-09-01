@@ -14,7 +14,8 @@
 
     android:accessibilityFlags="
         flagReportViewIds|
-        flagRetrieveInteractiveWindows"
+        flagRetrieveInteractiveWindows|
+        flagIncludeNotImportantViews"
 
     android:canRetrieveWindowContent="true"
 

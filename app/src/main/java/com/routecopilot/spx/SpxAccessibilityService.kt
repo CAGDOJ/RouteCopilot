@@ -2,6 +2,7 @@ package com.routecopilot.spx
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.PendingIntent
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
@@ -16,7 +17,8 @@ import com.routecopilot.MainActivity
 import java.util.Calendar
 import java.util.GregorianCalendar
 
-class SpxAccessibilityService : AccessibilityService() {
+class SpxAccessibilityService :
+    AccessibilityService() {
 
     companion object {
 
@@ -26,30 +28,21 @@ class SpxAccessibilityService : AccessibilityService() {
         private const val SPX_PACKAGE =
             "com.shopee.spx.driver.brazil"
 
-        private const val SCAN_DELAY_MS =
+        private const val SCAN_DELAY =
             700L
 
-        private const val NAVIGATION_DELAY_MS =
-            1500L
+        private const val NAV_DELAY =
+            1300L
 
         /*
-         * O gesto ser aceito NÃO significa que a tela
-         * realmente se moveu.
-         *
-         * Por isso verificamos também se os BRs visíveis
-         * continuam exatamente iguais.
+         * Sem total conhecido, só consideramos final
+         * depois de várias páginas realmente iguais.
          */
-        private const val MIN_TIME_WITHOUT_NEW_MS =
+        private const val SAME_VIEW_LIMIT =
+            12
+
+        private const val MIN_NO_NEW_TIME =
             12_000L
-
-        private const val SAME_PAGE_LIMIT =
-            8
-
-        private const val STAGNANT_LIMIT =
-            10
-
-        private const val MIN_GESTURE_INTERVAL_MS =
-            850L
     }
 
     private val handler =
@@ -63,28 +56,20 @@ class SpxAccessibilityService : AccessibilityService() {
     private var loginAvisado =
         false
 
-    private var ultimoEstadoLogado:
+    private var ultimoEstado:
         SpxState? =
         null
 
-    private var ultimoAtLogado:
+    private var ultimoAt:
         String? =
+        null
+
+    private var ultimoTotalLogado:
+        Int? =
         null
 
     private var ultimaQuantidade =
         0
-
-    private var stagnantPasses =
-        0
-
-    private var mesmaPaginaConsecutiva =
-        0
-
-    private var ultimoFingerprint =
-        ""
-
-    private var ultimoNovoPacoteTime =
-        SystemClock.elapsedRealtime()
 
     private var ultimoNavigationTime =
         0L
@@ -92,14 +77,21 @@ class SpxAccessibilityService : AccessibilityService() {
     private var ultimoGestureTime =
         0L
 
+    private var ultimoNovoPacoteTime =
+        SystemClock.elapsedRealtime()
+
+    private var ultimoFingerprint =
+        ""
+
+    private var mesmaViewport =
+        0
+
     private val scanRunnable =
         Runnable {
-
             executarScan()
         }
 
     override fun onServiceConnected() {
-
         super.onServiceConnected()
 
         Log.d(
@@ -112,9 +104,7 @@ class SpxAccessibilityService : AccessibilityService() {
         event: AccessibilityEvent?
     ) {
 
-        if (
-            event == null
-        ) {
+        if (event == null) {
             return
         }
 
@@ -123,9 +113,6 @@ class SpxAccessibilityService : AccessibilityService() {
                 ?.toString()
                 ?: return
 
-        /*
-         * O serviço só trabalha sobre o SPX.
-         */
         if (
             packageName !=
             SPX_PACKAGE
@@ -133,28 +120,17 @@ class SpxAccessibilityService : AccessibilityService() {
             return
         }
 
-        /*
-         * Caso o usuário tenha iniciado uma nova rota
-         * depois de uma importação anterior.
-         */
         if (
             importCompleted &&
             SpxSessionState.state.value ==
             SpxState.UNKNOWN
         ) {
-
-            resetInternalImport()
+            resetInternal()
         }
 
-        if (
-            importCompleted
-        ) {
+        if (importCompleted) {
             return
         }
-
-        SpxSessionState.updatePackageName(
-            packageName
-        )
 
         scheduleScan(
             180L
@@ -162,8 +138,7 @@ class SpxAccessibilityService : AccessibilityService() {
     }
 
     private fun scheduleScan(
-        delay: Long =
-            SCAN_DELAY_MS
+        delay: Long = SCAN_DELAY
     ) {
 
         handler.removeCallbacks(
@@ -178,9 +153,7 @@ class SpxAccessibilityService : AccessibilityService() {
 
     private fun executarScan() {
 
-        if (
-            importCompleted
-        ) {
+        if (importCompleted) {
             return
         }
 
@@ -190,7 +163,7 @@ class SpxAccessibilityService : AccessibilityService() {
 
                     alterarEstado(
                         SpxState.WAITING_CONTENT,
-                        "Aguardando o SPX carregar..."
+                        "Aguardando SPX..."
                     )
 
                     scheduleScan()
@@ -206,14 +179,7 @@ class SpxAccessibilityService : AccessibilityService() {
             textos
         )
 
-        if (
-            textos.isEmpty()
-        ) {
-
-            alterarEstado(
-                SpxState.WAITING_CONTENT,
-                "Aguardando o SPX carregar..."
-            )
+        if (textos.isEmpty()) {
 
             scheduleScan()
 
@@ -222,14 +188,12 @@ class SpxAccessibilityService : AccessibilityService() {
 
         val tela =
             textos
-                .joinToString(
-                    " "
-                )
+                .joinToString(" ")
                 .lowercase()
 
-        // ====================================================
+        // ==================================================
         // LOGIN
-        // ====================================================
+        // ==================================================
 
         if (
             pareceTelaLogin(
@@ -239,19 +203,17 @@ class SpxAccessibilityService : AccessibilityService() {
 
             alterarEstado(
                 SpxState.LOGIN_REQUIRED,
-                "Autentique-se normalmente no SPX."
+                "Faça login normalmente no SPX."
             )
 
-            if (
-                !loginAvisado
-            ) {
+            if (!loginAvisado) {
 
                 loginAvisado =
                     true
 
                 Toast.makeText(
                     applicationContext,
-                    "Faça o login normalmente no SPX.",
+                    "Faça login no SPX. O Copilot continua automaticamente.",
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -263,77 +225,50 @@ class SpxAccessibilityService : AccessibilityService() {
             return
         }
 
-        /*
-         * Se saímos da tela de login, a autenticação
-         * provavelmente terminou.
-         */
-        if (
-            loginAvisado
-        ) {
+        loginAvisado =
+            false
 
-            loginAvisado =
-                false
+        // ==================================================
+        // TOTAL REAL DA ROTA
+        // ==================================================
 
-            alterarEstado(
-                SpxState.AUTHENTICATED,
-                "Autenticação concluída."
-            )
-
-            Log.d(
-                TAG,
-                "LOGIN=CONCLUIDO"
-            )
-        }
-
-        // ====================================================
-        // TOTAL DA ROTA
-        // ====================================================
-
-        val totalDetectado =
+        val total =
             encontrarTotalPedidos(
                 textos
             )
 
-        if (
-            totalDetectado != null
-        ) {
-
-            val anterior =
-                SpxSessionState
-                    .totalEsperado
-                    .value
+        if (total != null) {
 
             SpxSessionState
                 .updateTotalEsperado(
-                    totalDetectado
+                    total
                 )
 
             if (
-                anterior !=
-                SpxSessionState
-                    .totalEsperado
-                    .value
+                ultimoTotalLogado !=
+                total
             ) {
+
+                ultimoTotalLogado =
+                    total
 
                 Log.d(
                     TAG,
-                    "TOTAL_ESPERADO=${SpxSessionState.totalEsperado.value}"
+                    "TOTAL_ESPERADO=$total"
                 )
             }
         }
 
-        // ====================================================
+        // ==================================================
         // AT
-        // ====================================================
+        // ==================================================
 
         val at =
-            encontrarCodigoAT(
+            encontrarAT(
                 textos
             )
 
-        if (
-            at != null
-        ) {
+        if (at != null) {
 
             SpxSessionState
                 .updateAtCode(
@@ -342,17 +277,17 @@ class SpxAccessibilityService : AccessibilityService() {
 
             SpxSessionState
                 .updateDataCarregamento(
-                    extrairDataCandidataDaAT(
+                    extrairDataAT(
                         at
                     )
                 )
 
             if (
-                ultimoAtLogado !=
+                ultimoAt !=
                 at
             ) {
 
-                ultimoAtLogado =
+                ultimoAt =
                     at
 
                 Log.d(
@@ -362,26 +297,48 @@ class SpxAccessibilityService : AccessibilityService() {
             }
         }
 
-        // ====================================================
-        // BRs VISÍVEIS
-        // ====================================================
+        // ==================================================
+        // PEDIDOS + ENDEREÇOS
+        // ==================================================
 
-        val brsVisiveis =
-            encontrarCodigosBR(
+        val encontrados =
+            encontrarPacotes(
+                root,
                 textos
             )
 
-        atualizarFingerprint(
-            brsVisiveis
-        )
+        val fingerprint =
+            encontrados
+                .keys
+                .sorted()
+                .joinToString("|")
+
+        if (
+            fingerprint.isNotBlank() &&
+            fingerprint ==
+            ultimoFingerprint
+        ) {
+
+            mesmaViewport++
+
+        } else if (
+            fingerprint.isNotBlank()
+        ) {
+
+            ultimoFingerprint =
+                fingerprint
+
+            mesmaViewport =
+                0
+        }
 
         val novos =
             SpxSessionState
-                .addPackageCodes(
-                    brsVisiveis
+                .addOrUpdatePackages(
+                    encontrados
                 )
 
-        val quantidadeAtual =
+        val quantidade =
             SpxSessionState
                 .packageCount
                 .value
@@ -391,54 +348,43 @@ class SpxAccessibilityService : AccessibilityService() {
                 .totalEsperado
                 .value
 
-        if (
-            novos > 0
-        ) {
-
-            stagnantPasses =
-                0
-
-            mesmaPaginaConsecutiva =
-                0
+        if (novos > 0) {
 
             ultimoNovoPacoteTime =
                 SystemClock.elapsedRealtime()
 
-            if (
-                quantidadeAtual !=
-                ultimaQuantidade
-            ) {
-
-                ultimaQuantidade =
-                    quantidadeAtual
-
-                Log.d(
-                    TAG,
-                    "PACOTES_TOTAL=$quantidadeAtual"
-                )
-            }
-
-        } else if (
-            quantidadeAtual > 0
-        ) {
-
-            stagnantPasses++
+            mesmaViewport =
+                0
         }
 
-        // ====================================================
-        // TOTAL CONHECIDO
-        // ====================================================
+        if (
+            quantidade !=
+            ultimaQuantidade
+        ) {
+
+            ultimaQuantidade =
+                quantidade
+
+            Log.d(
+                TAG,
+                "PACOTES_TOTAL=$quantidade"
+            )
+        }
+
+        // ==================================================
+        // FINAL CORRETO PELO TOTAL
+        // ==================================================
 
         if (
             totalEsperado != null &&
             totalEsperado > 0 &&
-            quantidadeAtual >=
+            quantidade >=
             totalEsperado
         ) {
 
             Log.d(
                 TAG,
-                "FIM=TOTAL_ESPERADO_ATINGIDO"
+                "FIM=TOTAL_ATINGIDO"
             )
 
             concluirImportacao()
@@ -446,129 +392,77 @@ class SpxAccessibilityService : AccessibilityService() {
             return
         }
 
-        // ====================================================
-        // IMPORTANDO LISTA
-        // ====================================================
+        // ==================================================
+        // JÁ ESTAMOS NA LISTA
+        // ==================================================
 
-        if (
-            quantidadeAtual > 0
-        ) {
+        if (quantidade > 0) {
 
             alterarEstado(
                 SpxState.SCANNING_PACKAGES,
                 if (
                     totalEsperado != null
                 ) {
-
-                    "Importando pedidos: $quantidadeAtual de $totalEsperado"
-
+                    "Lendo pedidos: $quantidade de $totalEsperado"
                 } else {
-
-                    "Importando pedidos: $quantidadeAtual encontrados"
+                    "Lendo pedidos: $quantidade encontrados"
                 }
             )
 
-            Log.d(
-                TAG,
-                "SCAN | TOTAL=$quantidadeAtual | ESPERADO=${totalEsperado ?: "?"} | PARADO=$stagnantPasses | PAGINA=$mesmaPaginaConsecutiva"
-            )
-
             /*
-             * IMPORTANTE:
+             * Se a viewport ficou igual duas vezes,
+             * não confiamos no ACTION_SCROLL_FORWARD.
              *
-             * Antes de tentar outra rolagem verificamos
-             * se a página já permaneceu igual por tempo
-             * suficiente.
-             *
-             * Isso corrige o bug em que dispatchGesture()
-             * retornava true no final e o Copilot nunca
-             * concluía a importação.
+             * Forçamos swipe físico.
              */
-            if (
-                verificarFimDaLista(
-                    quantidadeAtual,
-                    totalEsperado
-                )
-            ) {
-                return
+            val forceGesture =
+                mesmaViewport >= 2
+
+            var movimentou =
+                false
+
+            if (!forceGesture) {
+
+                movimentou =
+                    tentarScrollNode(
+                        root
+                    )
+
+                if (movimentou) {
+
+                    Log.d(
+                        TAG,
+                        "SCROLL=NODE"
+                    )
+                }
+            }
+
+            if (!movimentou) {
+
+                movimentou =
+                    tentarSwipe()
+
+                if (movimentou) {
+
+                    Log.d(
+                        TAG,
+                        "SCROLL=GESTURE"
+                    )
+                }
             }
 
             /*
-             * Primeiro tentamos a API de scroll da própria
-             * árvore de acessibilidade.
+             * Se conhecemos o total, NUNCA finalizamos
+             * antes dele.
              */
-            val nodeScroll =
-                tentarScrollPorNodes(
-                    root
-                )
-
             if (
-                nodeScroll
+                totalEsperado == null
             ) {
 
-                Log.d(
-                    TAG,
-                    "SCROLL=NODE"
+                verificarFimSemTotal(
+                    quantidade
                 )
-
-                scheduleScan(
-                    950L
-                )
-
-                return
             }
-
-            /*
-             * Fallback: swipe automático.
-             */
-            val gesture =
-                tentarSwipeVertical()
-
-            if (
-                gesture
-            ) {
-
-                Log.d(
-                    TAG,
-                    "SCROLL=GESTURE_ENVIADO"
-                )
-
-                scheduleScan(
-                    1100L
-                )
-
-                return
-            }
-
-            Log.d(
-                TAG,
-                "SCROLL=NAO_EXECUTADO"
-            )
-
-            scheduleScan(
-                1100L
-            )
-
-            return
-        }
-
-        // ====================================================
-        // AT ENCONTRADA, MAS AINDA SEM PEDIDOS
-        // ====================================================
-
-        if (
-            at != null
-        ) {
-
-            alterarEstado(
-                SpxState.ROUTE_DETECTED,
-                "Rota localizada. Abrindo pedidos..."
-            )
-
-            tentarAbrirAT(
-                root,
-                at
-            )
 
             scheduleScan(
                 1000L
@@ -577,9 +471,32 @@ class SpxAccessibilityService : AccessibilityService() {
             return
         }
 
-        // ====================================================
-        // LOCALIZAR A ÁREA DE ENTREGAS
-        // ====================================================
+        // ==================================================
+        // AT ENCONTRADA
+        // ==================================================
+
+        if (at != null) {
+
+            alterarEstado(
+                SpxState.ROUTE_DETECTED,
+                "Abrindo rota..."
+            )
+
+            tentarAbrirAT(
+                root,
+                at
+            )
+
+            scheduleScan(
+                900L
+            )
+
+            return
+        }
+
+        // ==================================================
+        // PROCURAR ENTREGAS
+        // ==================================================
 
         if (
             pareceTelaAutenticada(
@@ -589,7 +506,7 @@ class SpxAccessibilityService : AccessibilityService() {
 
             alterarEstado(
                 SpxState.FINDING_ROUTE,
-                "Localizando rota no SPX..."
+                "Localizando rota..."
             )
 
             tentarAbrirEntregas(
@@ -597,7 +514,7 @@ class SpxAccessibilityService : AccessibilityService() {
             )
 
             scheduleScan(
-                1000L
+                900L
             )
 
             return
@@ -605,7 +522,7 @@ class SpxAccessibilityService : AccessibilityService() {
 
         alterarEstado(
             SpxState.CHECKING_SESSION,
-            "Verificando sessão do SPX..."
+            "Verificando SPX..."
         )
 
         scheduleScan(
@@ -613,145 +530,493 @@ class SpxAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun atualizarFingerprint(
-        brs: Set<String>
-    ) {
+    // ======================================================
+    // TOTAL DE PEDIDOS
+    // ======================================================
 
-        if (
-            brs.isEmpty()
+    private fun encontrarTotalPedidos(
+        textos: List<String>
+    ): Int? {
+
+        var maior:
+            Int? =
+            null
+
+        fun considerar(
+            valor: Int?
         ) {
-            return
+
+            if (
+                valor == null ||
+                valor <= 0 ||
+                valor > 1000
+            ) {
+                return
+            }
+
+            if (
+                maior == null ||
+                valor > maior!!
+            ) {
+                maior = valor
+            }
         }
 
-        val atual =
-            brs
-                .sorted()
-                .joinToString("|")
-
-        if (
-            atual ==
-            ultimoFingerprint
-        ) {
-
-            mesmaPaginaConsecutiva++
-
-        } else {
-
-            ultimoFingerprint =
-                atual
-
-            /*
-             * Mudou a página.
-             */
-            mesmaPaginaConsecutiva =
-                0
-        }
-    }
-
-    private fun verificarFimDaLista(
-        quantidade: Int,
-        totalEsperado: Int?
-    ): Boolean {
-
-        /*
-         * Se o SPX mostrou um total, não usamos
-         * estimativa.
-         *
-         * Temos que atingir esse total.
-         */
-        if (
-            totalEsperado != null &&
-            totalEsperado > 0
-        ) {
-
-            return false
-        }
-
-        if (
-            quantidade <= 0
-        ) {
-            return false
-        }
-
-        val agora =
-            SystemClock.elapsedRealtime()
-
-        val semNovos =
-            agora -
-                ultimoNovoPacoteTime
-
-        val tempoOk =
-            semNovos >=
-                MIN_TIME_WITHOUT_NEW_MS
-
-        val estagnou =
-            stagnantPasses >=
-                STAGNANT_LIMIT
-
-        val mesmaPagina =
-            mesmaPaginaConsecutiva >=
-                SAME_PAGE_LIMIT
-
-        if (
-            tempoOk &&
-            estagnou &&
-            mesmaPagina
-        ) {
-
-            Log.d(
-                TAG,
-                "FIM=LISTA_ESTAVEL | TOTAL=$quantidade"
+        val tudo =
+            textos.joinToString(
+                " | "
             )
 
-            concluirImportacao()
+        /*
+         * 3/5
+         * 64 / 66
+         */
+        Regex(
+            """(?<!\d)(\d{1,4})\s*/\s*(\d{1,4})(?!\d)"""
+        )
+            .findAll(tudo)
+            .forEach {
 
-            return true
+                val atual =
+                    it.groupValues[1]
+                        .toIntOrNull()
+
+                val total =
+                    it.groupValues[2]
+                        .toIntOrNull()
+
+                if (
+                    atual != null &&
+                    total != null &&
+                    atual <= total
+                ) {
+
+                    considerar(
+                        total
+                    )
+                }
+            }
+
+        /*
+         * "5 pedidos"
+         */
+        Regex(
+            """(?<!\d)(\d{1,4})\s*(?:pedidos?|pacotes?|entregas?)\b""",
+            RegexOption.IGNORE_CASE
+        )
+            .findAll(tudo)
+            .forEach {
+
+                considerar(
+                    it.groupValues[1]
+                        .toIntOrNull()
+                )
+            }
+
+        /*
+         * "Pedidos: 5"
+         */
+        Regex(
+            """\b(?:pedidos?|pacotes?|entregas?)\s*[:\-]?\s*(\d{1,4})(?!\d)""",
+            RegexOption.IGNORE_CASE
+        )
+            .findAll(tudo)
+            .forEach {
+
+                considerar(
+                    it.groupValues[1]
+                        .toIntOrNull()
+                )
+            }
+
+        /*
+         * Alguns apps colocam:
+         *
+         * TextView = PEDIDOS
+         * próximo TextView = 5
+         */
+        for (
+            i in 0 until
+                textos.size - 1
+        ) {
+
+            val primeiro =
+                textos[i]
+                    .trim()
+                    .lowercase()
+
+            val segundo =
+                textos[i + 1]
+                    .trim()
+
+            if (
+                primeiro.matches(
+                    Regex(
+                        """pedidos?|pacotes?|entregas?"""
+                    )
+                )
+            ) {
+
+                considerar(
+                    segundo
+                        .toIntOrNull()
+                )
+            }
+
+            val numero =
+                textos[i]
+                    .trim()
+                    .toIntOrNull()
+
+            val label =
+                textos[i + 1]
+                    .trim()
+                    .lowercase()
+
+            if (
+                numero != null &&
+                label.matches(
+                    Regex(
+                        """pedidos?|pacotes?|entregas?"""
+                    )
+                )
+            ) {
+
+                considerar(
+                    numero
+                )
+            }
         }
 
-        return false
+        return maior
     }
 
-    private fun tentarScrollPorNodes(
+    // ======================================================
+    // AT
+    // ======================================================
+
+    private fun encontrarAT(
+        textos: List<String>
+    ): String? {
+
+        val regex =
+            Regex(
+                """\bAT[A-Z0-9]{8,}\b""",
+                RegexOption.IGNORE_CASE
+            )
+
+        textos.forEach {
+
+            val texto =
+                it.replace(
+                    " ",
+                    ""
+                )
+                    .uppercase()
+
+            val match =
+                regex.find(
+                    texto
+                )
+
+            if (match != null) {
+
+                return match
+                    .value
+                    .uppercase()
+            }
+        }
+
+        return null
+    }
+
+    // ======================================================
+    // BR + ENDEREÇO
+    // ======================================================
+
+    private fun encontrarPacotes(
+        root: AccessibilityNodeInfo,
+        textosTela: List<String>
+    ): Map<String, String?> {
+
+        val encontrados =
+            linkedMapOf<String, String?>()
+
+        percorrerNodes(
+            root
+        ) { node ->
+
+            if (node.isPassword) {
+                return@percorrerNodes
+            }
+
+            val valores =
+                listOfNotNull(
+                    node.text
+                        ?.toString(),
+                    node.contentDescription
+                        ?.toString()
+                )
+
+            valores.forEach { valor ->
+
+                encontrarBRs(
+                    valor
+                )
+                    .forEach { br ->
+
+                        val endereco =
+                            encontrarEnderecoProximo(
+                                node,
+                                br
+                            )
+
+                        val existente =
+                            encontrados[br]
+
+                        if (
+                            existente.isNullOrBlank() ||
+                            !endereco.isNullOrBlank()
+                        ) {
+
+                            encontrados[br] =
+                                endereco
+                        }
+                    }
+            }
+        }
+
+        /*
+         * Tela de detalhes:
+         * se só existe um BR visível, tenta associar
+         * um endereço presente em qualquer região da tela.
+         */
+        if (
+            encontrados.size == 1
+        ) {
+
+            val br =
+                encontrados.keys.first()
+
+            if (
+                encontrados[br]
+                    .isNullOrBlank()
+            ) {
+
+                selecionarEndereco(
+                    textosTela,
+                    br
+                )?.let {
+
+                    encontrados[br] =
+                        it
+                }
+            }
+        }
+
+        return encontrados
+    }
+
+    private fun encontrarBRs(
+        texto: String
+    ): Set<String> {
+
+        val resultado =
+            linkedSetOf<String>()
+
+        Regex(
+            """\bBR[A-Z0-9]{8,}\b""",
+            RegexOption.IGNORE_CASE
+        )
+            .findAll(
+                texto
+                    .replace(
+                        " ",
+                        ""
+                    )
+                    .uppercase()
+            )
+            .forEach {
+
+                resultado.add(
+                    it.value
+                        .uppercase()
+                )
+            }
+
+        return resultado
+    }
+
+    private fun encontrarEnderecoProximo(
+        original: AccessibilityNodeInfo,
+        br: String
+    ): String? {
+
+        var node:
+            AccessibilityNodeInfo? =
+            original
+
+        repeat(5) {
+
+            if (node == null) {
+                return@repeat
+            }
+
+            val textos =
+                mutableListOf<String>()
+
+            coletarTextos(
+                node,
+                textos
+            )
+
+            selecionarEndereco(
+                textos,
+                br
+            )?.let {
+
+                return it
+            }
+
+            node =
+                node?.parent
+        }
+
+        return null
+    }
+
+    private fun selecionarEndereco(
+        textos: List<String>,
+        br: String
+    ): String? {
+
+        val ignorar =
+            listOf(
+                "entregue",
+                "ocorrência",
+                "ocorrencia",
+                "escanear",
+                "ligar",
+                "mensagem",
+                "telefone",
+                "pedido",
+                "pedidos",
+                "rota",
+                "iniciar entregas",
+                "voltar",
+                br.lowercase()
+            )
+
+        val linhas =
+            textos
+                .map {
+                    it.trim()
+                }
+                .filter {
+                    it.length >= 4
+                }
+                .distinct()
+                .filter { linha ->
+
+                    val lower =
+                        linha.lowercase()
+
+                    ignorar.none {
+                        lower ==
+                            it ||
+                            lower.startsWith(
+                                "$it:"
+                            )
+                    }
+                }
+
+        val ruaRegex =
+            Regex(
+                """\b(rua|r\.|avenida|av\.|travessa|tv\.|passagem|estrada|rodovia|alameda|conjunto|residencial|vila|br-\d+)\b""",
+                RegexOption.IGNORE_CASE
+            )
+
+        val indice =
+            linhas.indexOfFirst {
+                ruaRegex.containsMatchIn(
+                    it
+                )
+            }
+
+        if (indice >= 0) {
+
+            return linhas
+                .drop(indice)
+                .take(3)
+                .joinToString(
+                    ", "
+                )
+                .take(240)
+        }
+
+        /*
+         * Fallback: linha com número + CEP/localidade.
+         */
+        val alternativa =
+            linhas.firstOrNull {
+
+                it.any(
+                    Char::isDigit
+                ) &&
+                    (
+                        it.contains(",") ||
+                            it.contains("-")
+                        )
+            }
+
+        return alternativa
+    }
+
+    // ======================================================
+    // SCROLL
+    // ======================================================
+
+    private fun tentarScrollNode(
         root: AccessibilityNodeInfo
     ): Boolean {
 
-        val candidatos =
+        val scrollables =
             mutableListOf<AccessibilityNodeInfo>()
 
-        coletarScrollables(
-            root,
-            candidatos
-        )
-
-        if (
-            candidatos.isEmpty()
+        percorrerNodes(
+            root
         ) {
-            return false
+
+            if (it.isScrollable) {
+
+                scrollables.add(
+                    it
+                )
+            }
         }
 
         val ordenados =
-            candidatos
-                .sortedByDescending { node ->
+            scrollables
+                .sortedByDescending {
 
                     val rect =
                         Rect()
 
-                    node.getBoundsInScreen(
+                    it.getBoundsInScreen(
                         rect
                     )
 
                     rect.height()
                 }
 
-        for (
-            node in ordenados
-        ) {
+        ordenados.forEach {
 
             try {
 
                 if (
-                    node.performAction(
-                        AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                    it.performAction(
+                        AccessibilityNodeInfo
+                            .ACTION_SCROLL_FORWARD
                     )
                 ) {
 
@@ -765,7 +1030,7 @@ class SpxAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun tentarSwipeVertical(): Boolean {
+    private fun tentarSwipe(): Boolean {
 
         val agora =
             SystemClock.elapsedRealtime()
@@ -773,63 +1038,83 @@ class SpxAccessibilityService : AccessibilityService() {
         if (
             agora -
             ultimoGestureTime <
-            MIN_GESTURE_INTERVAL_MS
+            700L
         ) {
+
             return false
         }
 
         ultimoGestureTime =
             agora
 
-        val metrics =
-            resources.displayMetrics
-
         val largura =
-            metrics
+            resources
+                .displayMetrics
                 .widthPixels
                 .toFloat()
 
         val altura =
-            metrics
+            resources
+                .displayMetrics
                 .heightPixels
                 .toFloat()
 
+        /*
+         * Alterna posição horizontal.
+         * Ajuda em telas onde o centro intercepta
+         * algum componente.
+         */
+        val posicoes =
+            floatArrayOf(
+                0.50f,
+                0.75f,
+                0.25f
+            )
+
+        val indice =
+            (
+                (
+                    agora /
+                        1000L
+                    ) %
+                    posicoes.size
+                )
+                .toInt()
+
         val x =
-            largura * 0.50f
+            largura *
+                posicoes[indice]
 
-        val inicioY =
-            altura * 0.78f
+        val inicio =
+            altura * 0.80f
 
-        val fimY =
-            altura * 0.30f
+        val fim =
+            altura * 0.25f
 
         val path =
             Path().apply {
 
                 moveTo(
                     x,
-                    inicioY
+                    inicio
                 )
 
                 lineTo(
                     x,
-                    fimY
+                    fim
                 )
             }
-
-        val stroke =
-            GestureDescription
-                .StrokeDescription(
-                    path,
-                    0L,
-                    430L
-                )
 
         val gesture =
             GestureDescription
                 .Builder()
                 .addStroke(
-                    stroke
+                    GestureDescription
+                        .StrokeDescription(
+                            path,
+                            0L,
+                            480L
+                        )
                 )
                 .build()
 
@@ -837,459 +1122,90 @@ class SpxAccessibilityService : AccessibilityService() {
 
             dispatchGesture(
                 gesture,
-                object :
-                    GestureResultCallback() {
-
-                    override fun onCompleted(
-                        gestureDescription:
-                            GestureDescription?
-                    ) {
-
-                        super.onCompleted(
-                            gestureDescription
-                        )
-
-                        Log.d(
-                            TAG,
-                            "GESTURE=COMPLETO"
-                        )
-                    }
-
-                    override fun onCancelled(
-                        gestureDescription:
-                            GestureDescription?
-                    ) {
-
-                        super.onCancelled(
-                            gestureDescription
-                        )
-
-                        Log.d(
-                            TAG,
-                            "GESTURE=CANCELADO"
-                        )
-                    }
-                },
+                null,
                 handler
             )
 
-        } catch (
-            e: Exception
-        ) {
-
-            Log.e(
-                TAG,
-                "ERRO_GESTURE",
-                e
-            )
+        } catch (_: Exception) {
 
             false
         }
     }
 
-    private fun pareceTelaLogin(
-        tela: String
-    ): Boolean {
-
-        val fortes =
-            listOf(
-                "esqueci minha senha",
-                "fazer login",
-                "iniciar sessão",
-                "código de verificação",
-                "codigo de verificacao"
-            )
-
-        if (
-            fortes.any {
-                tela.contains(it)
-            }
-        ) {
-            return true
-        }
-
-        val comuns =
-            listOf(
-                "login",
-                "senha",
-                "email",
-                "e-mail",
-                "telefone",
-                "entrar"
-            )
-
-        return comuns.count {
-            tela.contains(it)
-        } >= 2
-    }
-
-    private fun pareceTelaAutenticada(
-        tela: String
-    ): Boolean {
-
-        val sinais =
-            listOf(
-                "entrega",
-                "entregas",
-                "rota",
-                "rotas",
-                "pacote",
-                "pacotes",
-                "em rota",
-                "escanear",
-                "ocorrência",
-                "entregue"
-            )
-
-        return sinais.any {
-            tela.contains(it)
-        }
-    }
-
-    private fun encontrarCodigoAT(
-        textos: List<String>
-    ): String? {
-
-        val regex =
-            Regex(
-                """\bAT[A-Z0-9]{8,}\b""",
-                RegexOption.IGNORE_CASE
-            )
-
-        textos.forEach { texto ->
-
-            val normalizado =
-                texto
-                    .replace(
-                        " ",
-                        ""
-                    )
-                    .replace(
-                        "\n",
-                        ""
-                    )
-                    .uppercase()
-
-            val resultado =
-                regex.find(
-                    normalizado
-                )
-
-            if (
-                resultado != null
-            ) {
-
-                return resultado
-                    .value
-                    .uppercase()
-            }
-        }
-
-        return null
-    }
-
-    private fun encontrarCodigosBR(
-        textos: List<String>
-    ): Set<String> {
-
-        val encontrados =
-            linkedSetOf<String>()
-
-        val regex =
-            Regex(
-                """\bBR[A-Z0-9]{8,}\b""",
-                RegexOption.IGNORE_CASE
-            )
-
-        textos.forEach { texto ->
-
-            val normalizado =
-                texto
-                    .replace(
-                        " ",
-                        ""
-                    )
-                    .replace(
-                        "\n",
-                        ""
-                    )
-                    .uppercase()
-
-            regex
-                .findAll(
-                    normalizado
-                )
-                .forEach { match ->
-
-                    encontrados.add(
-                        match
-                            .value
-                            .uppercase()
-                    )
-                }
-        }
-
-        return encontrados
-    }
-
-    private fun encontrarTotalPedidos(
-        textos: List<String>
-    ): Int? {
-
-        var maior:
-            Int? =
-            null
-
-        /*
-         * 9/66
-         * 64 / 66
-         */
-        val fracao =
-            Regex(
-                """(?<!\d)(\d{1,4})\s*/\s*(\d{1,4})(?!\d)"""
-            )
-
-        textos.forEach { texto ->
-
-            fracao
-                .findAll(
-                    texto
-                )
-                .forEach { match ->
-
-                    val atual =
-                        match
-                            .groupValues[1]
-                            .toIntOrNull()
-
-                    val total =
-                        match
-                            .groupValues[2]
-                            .toIntOrNull()
-
-                    if (
-                        atual != null &&
-                        total != null &&
-                        atual >= 0 &&
-                        total > 0 &&
-                        atual <= total &&
-                        total <= 1000
-                    ) {
-
-                        if (
-                            maior == null ||
-                            total > maior!!
-                        ) {
-
-                            maior =
-                                total
-                        }
-                    }
-                }
-        }
-
-        /*
-         * 66 pedidos
-         * 66 pacotes
-         * 66 entregas
-         */
-        val textual =
-            Regex(
-                """(?<!\d)(\d{1,4})\s*(?:pedidos?|pacotes?|entregas?)(?!\w)""",
-                RegexOption.IGNORE_CASE
-            )
-
-        textos.forEach { texto ->
-
-            textual
-                .findAll(
-                    texto
-                )
-                .forEach { match ->
-
-                    val total =
-                        match
-                            .groupValues[1]
-                            .toIntOrNull()
-
-                    if (
-                        total != null &&
-                        total > 0 &&
-                        total <= 1000
-                    ) {
-
-                        if (
-                            maior == null ||
-                            total > maior!!
-                        ) {
-
-                            maior =
-                                total
-                        }
-                    }
-                }
-        }
-
-        return maior
-    }
-
-    private fun extrairDataCandidataDaAT(
-        at: String
-    ): String? {
-
-        val regex =
-            Regex(
-                """^AT(\d{4})(\d{2})(\d{2})"""
-            )
-
-        val resultado =
-            regex.find(
-                at.uppercase()
-            )
-                ?: return null
-
-        val ano =
-            resultado
-                .groupValues[1]
-                .toIntOrNull()
-                ?: return null
-
-        val mes =
-            resultado
-                .groupValues[2]
-                .toIntOrNull()
-                ?: return null
-
-        val dia =
-            resultado
-                .groupValues[3]
-                .toIntOrNull()
-                ?: return null
-
-        if (
-            ano !in 2020..2100
-        ) {
-            return null
-        }
-
-        try {
-
-            GregorianCalendar()
-                .apply {
-
-                    isLenient =
-                        false
-
-                    set(
-                        Calendar.YEAR,
-                        ano
-                    )
-
-                    set(
-                        Calendar.MONTH,
-                        mes - 1
-                    )
-
-                    set(
-                        Calendar.DAY_OF_MONTH,
-                        dia
-                    )
-
-                    time
-                }
-
-        } catch (
-            _: Exception
-        ) {
-
-            return null
-        }
-
-        return String.format(
-            "%02d/%02d/%04d",
-            dia,
-            mes,
-            ano
-        )
-    }
-
-    private fun coletarScrollables(
-        node: AccessibilityNodeInfo?,
-        resultado:
-            MutableList<AccessibilityNodeInfo>
+    private fun verificarFimSemTotal(
+        quantidade: Int
     ) {
 
         if (
-            node == null
+            quantidade <= 0
         ) {
             return
         }
 
+        val tempoSemNovo =
+            SystemClock.elapsedRealtime() -
+                ultimoNovoPacoteTime
+
         if (
-            node.isScrollable
+            mesmaViewport >=
+            SAME_VIEW_LIMIT &&
+            tempoSemNovo >=
+            MIN_NO_NEW_TIME
         ) {
 
-            resultado.add(
-                node
+            Log.d(
+                TAG,
+                "FIM=LISTA_CONFIRMADA | TOTAL=$quantidade"
             )
-        }
 
-        for (
-            i in 0 until
-            node.childCount
-        ) {
-
-            coletarScrollables(
-                node.getChild(i),
-                resultado
-            )
+            concluirImportacao()
         }
     }
+
+    // ======================================================
+    // NAVEGAÇÃO SPX
+    // ======================================================
 
     private fun tentarAbrirEntregas(
         root: AccessibilityNodeInfo
     ) {
 
-        if (
-            !podeNavegarAgora()
-        ) {
+        if (!podeNavegar()) {
             return
         }
 
-        val palavras =
-            listOf(
-                "entregas",
-                "entrega"
-            )
+        listOf(
+            "entregas",
+            "entrega"
+        )
+            .forEach {
 
-        for (
-            palavra in palavras
-        ) {
+                val node =
+                    encontrarNodeTexto(
+                        root,
+                        it,
+                        false
+                    )
 
-            val node =
-                encontrarNodePorTexto(
-                    root,
-                    palavra,
-                    false
-                )
+                if (
+                    node != null &&
+                    clicarNodeOuPai(
+                        node
+                    )
+                ) {
 
-            if (
-                node != null &&
-                clicarNodeOuPai(
-                    node
-                )
-            ) {
+                    ultimoNavigationTime =
+                        SystemClock
+                            .elapsedRealtime()
 
-                registrarNavegacao()
+                    Log.d(
+                        TAG,
+                        "NAV=ENTREGAS"
+                    )
 
-                Log.d(
-                    TAG,
-                    "NAV=ENTREGAS"
-                )
-
-                return
+                    return
+                }
             }
-        }
     }
 
     private fun tentarAbrirAT(
@@ -1297,14 +1213,12 @@ class SpxAccessibilityService : AccessibilityService() {
         at: String
     ) {
 
-        if (
-            !podeNavegarAgora()
-        ) {
+        if (!podeNavegar()) {
             return
         }
 
         val node =
-            encontrarNodePorTexto(
+            encontrarNodeTexto(
                 root,
                 at,
                 true
@@ -1317,7 +1231,9 @@ class SpxAccessibilityService : AccessibilityService() {
             )
         ) {
 
-            registrarNavegacao()
+            ultimoNavigationTime =
+                SystemClock
+                    .elapsedRealtime()
 
             Log.d(
                 TAG,
@@ -1326,120 +1242,77 @@ class SpxAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun podeNavegarAgora():
-        Boolean {
+    private fun podeNavegar(): Boolean {
 
-        val agora =
-            SystemClock.elapsedRealtime()
-
-        return agora -
-            ultimoNavigationTime >=
-            NAVIGATION_DELAY_MS
+        return (
+            SystemClock.elapsedRealtime() -
+                ultimoNavigationTime
+            ) >=
+            NAV_DELAY
     }
 
-    private fun registrarNavegacao() {
-
-        ultimoNavigationTime =
-            SystemClock.elapsedRealtime()
-    }
-
-    private fun encontrarNodePorTexto(
+    private fun encontrarNodeTexto(
         node: AccessibilityNodeInfo?,
         procurado: String,
         exato: Boolean
     ): AccessibilityNodeInfo? {
 
-        if (
-            node == null
-        ) {
+        if (node == null) {
             return null
         }
 
-        /*
-         * Não inspeciona conteúdo de senha.
-         */
-        if (
-            !node.isPassword
-        ) {
+        if (!node.isPassword) {
 
-            val texto =
-                node.text
-                    ?.toString()
-                    ?.trim()
-
-            val descricao =
-                node
-                    .contentDescription
-                    ?.toString()
-                    ?.trim()
-
-            if (
-                textoCombina(
-                    texto,
-                    procurado,
-                    exato
-                ) ||
-                textoCombina(
-                    descricao,
-                    procurado,
-                    exato
+            val valores =
+                listOfNotNull(
+                    node.text
+                        ?.toString(),
+                    node.contentDescription
+                        ?.toString()
                 )
-            ) {
 
-                return node
+            valores.forEach {
+
+                val bate =
+                    if (exato) {
+
+                        it.trim()
+                            .equals(
+                                procurado,
+                                true
+                            )
+
+                    } else {
+
+                        it.contains(
+                            procurado,
+                            true
+                        )
+                    }
+
+                if (bate) {
+
+                    return node
+                }
             }
         }
 
         for (
             i in 0 until
-            node.childCount
+                node.childCount
         ) {
 
-            val resultado =
-                encontrarNodePorTexto(
-                    node.getChild(i),
-                    procurado,
-                    exato
-                )
+            encontrarNodeTexto(
+                node.getChild(i),
+                procurado,
+                exato
+            )?.let {
 
-            if (
-                resultado != null
-            ) {
-                return resultado
+                return it
             }
         }
 
         return null
-    }
-
-    private fun textoCombina(
-        valor: String?,
-        procurado: String,
-        exato: Boolean
-    ): Boolean {
-
-        if (
-            valor.isNullOrBlank()
-        ) {
-            return false
-        }
-
-        return if (
-            exato
-        ) {
-
-            valor.equals(
-                procurado,
-                ignoreCase = true
-            )
-
-        } else {
-
-            valor.contains(
-                procurado,
-                ignoreCase = true
-            )
-        }
     }
 
     private fun clicarNodeOuPai(
@@ -1450,105 +1323,44 @@ class SpxAccessibilityService : AccessibilityService() {
             AccessibilityNodeInfo? =
             original
 
-        var nivel =
-            0
+        repeat(7) {
 
-        while (
-            node != null &&
-            nivel < 7
-        ) {
+            if (node == null) {
+                return false
+            }
 
             if (
-                node.isClickable
+                node?.isClickable ==
+                true
             ) {
 
                 return try {
 
-                    node.performAction(
-                        AccessibilityNodeInfo.ACTION_CLICK
+                    node!!.performAction(
+                        AccessibilityNodeInfo
+                            .ACTION_CLICK
                     )
 
-                } catch (
-                    _: Exception
-                ) {
+                } catch (_: Exception) {
 
                     false
                 }
             }
 
             node =
-                node.parent
-
-            nivel++
+                node?.parent
         }
 
         return false
     }
 
-    private fun coletarTextos(
-        node: AccessibilityNodeInfo?,
-        resultado:
-            MutableList<String>
-    ) {
-
-        if (
-            node == null
-        ) {
-            return
-        }
-
-        if (
-            !node.isPassword
-        ) {
-
-            val texto =
-                node.text
-                    ?.toString()
-                    ?.trim()
-
-            if (
-                !texto.isNullOrBlank()
-            ) {
-
-                resultado.add(
-                    texto
-                )
-            }
-
-            val descricao =
-                node
-                    .contentDescription
-                    ?.toString()
-                    ?.trim()
-
-            if (
-                !descricao.isNullOrBlank() &&
-                descricao != texto
-            ) {
-
-                resultado.add(
-                    descricao
-                )
-            }
-        }
-
-        for (
-            i in 0 until
-            node.childCount
-        ) {
-
-            coletarTextos(
-                node.getChild(i),
-                resultado
-            )
-        }
-    }
+    // ======================================================
+    // RETORNO AO ROUTECOPILOT
+    // ======================================================
 
     private fun concluirImportacao() {
 
-        if (
-            importCompleted
-        ) {
+        if (importCompleted) {
             return
         }
 
@@ -1585,94 +1397,350 @@ class SpxAccessibilityService : AccessibilityService() {
             "IMPORT_COMPLETE | TOTAL=$quantidade"
         )
 
-        /*
-         * Marca a tela de gestão ANTES de abrir
-         * o MainActivity.
-         */
-        SpxSessionState
-            .requestOpenManagement()
+        Toast.makeText(
+            applicationContext,
+            "$quantidade pedidos importados",
+            Toast.LENGTH_SHORT
+        ).show()
 
-        voltarParaCopilot()
+        retornarAoCopilot()
     }
 
-    private fun voltarParaCopilot() {
+    private fun retornarAoCopilot() {
 
-        SpxSessionState.updateState(
-            SpxState.RETURNING_TO_COPILOT
-        )
-
-        Log.d(
-            TAG,
-            "RETORNO=COPILOT_SOLICITADO"
-        )
-
-        val intent =
-            Intent(
-                applicationContext,
-                MainActivity::class.java
-            ).apply {
-
-                flags =
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-
-                putExtra(
-                    "OPEN_ROUTE_MANAGEMENT",
-                    true
-                )
-            }
-
-        try {
-
-            startActivity(
-                intent
+        SpxSessionState
+            .updateState(
+                SpxState.RETURNING_TO_COPILOT
             )
 
-            SpxSessionState
-                .updateState(
-                    SpxState.ROUTE_READY
-                )
+        /*
+         * Primeiro sai da tela atual do SPX.
+         */
+        performGlobalAction(
+            GLOBAL_ACTION_BACK
+        )
 
-            SpxSessionState
-                .updateMessage(
-                    "Rota pronta para gestão."
-                )
+        handler.postDelayed(
+            {
+
+                val intent =
+                    Intent(
+                        applicationContext,
+                        MainActivity::class.java
+                    ).apply {
+
+                        flags =
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP
+
+                        putExtra(
+                            "OPEN_ROUTE_MANAGEMENT",
+                            true
+                        )
+                    }
+
+                try {
+
+                    /*
+                     * PendingIntent costuma ser mais confiável
+                     * para trazer Activity à frente a partir
+                     * de AccessibilityService.
+                     */
+                    val pending =
+                        PendingIntent
+                            .getActivity(
+                                applicationContext,
+                                1001,
+                                intent,
+                                PendingIntent.FLAG_UPDATE_CURRENT or
+                                    PendingIntent.FLAG_IMMUTABLE
+                            )
+
+                    pending.send()
+
+                    SpxSessionState
+                        .updateState(
+                            SpxState.ROUTE_READY
+                        )
+
+                    Log.d(
+                        TAG,
+                        "RETORNO_COPILOT=OK"
+                    )
+
+                } catch (e: Exception) {
+
+                    Log.e(
+                        TAG,
+                        "PENDING_INTENT_FALHOU",
+                        e
+                    )
+
+                    try {
+
+                        startActivity(
+                            intent
+                        )
+
+                        SpxSessionState
+                            .updateState(
+                                SpxState.ROUTE_READY
+                            )
+
+                        Log.d(
+                            TAG,
+                            "RETORNO_COPILOT=FALLBACK_OK"
+                        )
+
+                    } catch (
+                        erro:
+                        Exception
+                    ) {
+
+                        Log.e(
+                            TAG,
+                            "RETORNO_COPILOT=ERRO",
+                            erro
+                        )
+                    }
+                }
+            },
+            550L
+        )
+    }
+
+    // ======================================================
+    // HELPERS
+    // ======================================================
+
+    private fun pareceTelaLogin(
+        tela: String
+    ): Boolean {
+
+        val fortes =
+            listOf(
+                "esqueci minha senha",
+                "fazer login",
+                "iniciar sessão",
+                "codigo de verificação",
+                "código de verificação"
+            )
+
+        if (
+            fortes.any {
+                tela.contains(it)
+            }
+        ) {
+            return true
+        }
+
+        val sinais =
+            listOf(
+                "login",
+                "senha",
+                "email",
+                "e-mail",
+                "entrar"
+            )
+
+        return sinais.count {
+            tela.contains(it)
+        } >= 2
+    }
+
+    private fun pareceTelaAutenticada(
+        tela: String
+    ): Boolean {
+
+        return listOf(
+            "entrega",
+            "entregas",
+            "rota",
+            "pacote",
+            "em rota",
+            "escanear",
+            "ocorrência",
+            "entregue"
+        )
+            .any {
+                tela.contains(it)
+            }
+    }
+
+    private fun alterarEstado(
+        estado: SpxState,
+        mensagem: String
+    ) {
+
+        SpxSessionState
+            .updateState(
+                estado
+            )
+
+        SpxSessionState
+            .updateMessage(
+                mensagem
+            )
+
+        if (
+            ultimoEstado !=
+            estado
+        ) {
+
+            ultimoEstado =
+                estado
 
             Log.d(
                 TAG,
-                "RETORNO=COPILOT_OK"
+                "STATUS=$estado"
             )
-
-        } catch (
-            e: Exception
-        ) {
-
-            Log.e(
-                TAG,
-                "RETORNO=COPILOT_ERRO",
-                e
-            )
-
-            /*
-             * Mesmo que o Android não deixe o serviço
-             * trazer a Activity automaticamente naquele
-             * instante, o estado fica marcado.
-             *
-             * Ao abrir/retomar o RouteCopilot,
-             * MainActivity vai direto para Gestão.
-             */
-            SpxSessionState
-                .requestOpenManagement()
         }
     }
 
-    private fun resetInternalImport() {
+    private fun coletarTextos(
+        node: AccessibilityNodeInfo?,
+        resultado: MutableList<String>
+    ) {
 
-        handler.removeCallbacks(
-            scanRunnable
+        if (node == null) {
+            return
+        }
+
+        if (!node.isPassword) {
+
+            node.text
+                ?.toString()
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?.let {
+                    resultado.add(
+                        it
+                    )
+                }
+
+            node.contentDescription
+                ?.toString()
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?.let {
+                    resultado.add(
+                        it
+                    )
+                }
+        }
+
+        for (
+            i in 0 until
+                node.childCount
+        ) {
+
+            coletarTextos(
+                node.getChild(i),
+                resultado
+            )
+        }
+    }
+
+    private fun percorrerNodes(
+        node: AccessibilityNodeInfo?,
+        bloco: (
+            AccessibilityNodeInfo
+        ) -> Unit
+    ) {
+
+        if (node == null) {
+            return
+        }
+
+        bloco(
+            node
         )
+
+        for (
+            i in 0 until
+                node.childCount
+        ) {
+
+            percorrerNodes(
+                node.getChild(i),
+                bloco
+            )
+        }
+    }
+
+    private fun extrairDataAT(
+        at: String
+    ): String? {
+
+        val match =
+            Regex(
+                """^AT(\d{4})(\d{2})(\d{2})"""
+            )
+                .find(
+                    at.uppercase()
+                )
+                ?: return null
+
+        val ano =
+            match.groupValues[1]
+                .toIntOrNull()
+                ?: return null
+
+        val mes =
+            match.groupValues[2]
+                .toIntOrNull()
+                ?: return null
+
+        val dia =
+            match.groupValues[3]
+                .toIntOrNull()
+                ?: return null
+
+        try {
+
+            GregorianCalendar()
+                .apply {
+
+                    isLenient =
+                        false
+
+                    set(
+                        Calendar.YEAR,
+                        ano
+                    )
+
+                    set(
+                        Calendar.MONTH,
+                        mes - 1
+                    )
+
+                    set(
+                        Calendar.DAY_OF_MONTH,
+                        dia
+                    )
+
+                    time
+                }
+
+        } catch (_: Exception) {
+
+            return null
+        }
+
+        return String.format(
+            "%02d/%02d/%04d",
+            dia,
+            mes,
+            ano
+        )
+    }
+
+    private fun resetInternal() {
 
         importCompleted =
             false
@@ -1680,32 +1748,32 @@ class SpxAccessibilityService : AccessibilityService() {
         loginAvisado =
             false
 
-        ultimoEstadoLogado =
+        ultimoEstado =
             null
 
-        ultimoAtLogado =
+        ultimoAt =
+            null
+
+        ultimoTotalLogado =
             null
 
         ultimaQuantidade =
             0
 
-        stagnantPasses =
-            0
-
-        mesmaPaginaConsecutiva =
-            0
-
         ultimoFingerprint =
             ""
 
-        ultimoNovoPacoteTime =
-            SystemClock.elapsedRealtime()
+        mesmaViewport =
+            0
 
         ultimoNavigationTime =
             0L
 
         ultimoGestureTime =
             0L
+
+        ultimoNovoPacoteTime =
+            SystemClock.elapsedRealtime()
 
         Log.d(
             TAG,
