@@ -2,7 +2,7 @@
 <accessibility-service
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:packageNames="com.shopee.spx.driver.brazil"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled|typeViewClicked"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
