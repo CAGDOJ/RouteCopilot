@@ -2,10 +2,9 @@ package com.routecopilot.spx
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
-import android.app.PendingIntent
 import android.content.Intent
 import android.graphics.Path
-import android.graphics.Rect
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -21,28 +20,11 @@ class SpxAccessibilityService :
     AccessibilityService() {
 
     companion object {
-
         private const val TAG =
             "RouteCopilotACC"
 
         private const val SPX_PACKAGE =
             "com.shopee.spx.driver.brazil"
-
-        private const val SCAN_DELAY =
-            700L
-
-        private const val NAV_DELAY =
-            1300L
-
-        /*
-         * Sem total conhecido, só consideramos final
-         * depois de várias páginas realmente iguais.
-         */
-        private const val SAME_VIEW_LIMIT =
-            12
-
-        private const val MIN_NO_NEW_TIME =
-            12_000L
     }
 
     private val handler =
@@ -50,46 +32,23 @@ class SpxAccessibilityService :
             Looper.getMainLooper()
         )
 
-    private var importCompleted =
-        false
-
-    private var loginAvisado =
-        false
-
-    private var ultimoEstado:
-        SpxState? =
-        null
-
-    private var ultimoAt:
-        String? =
-        null
-
-    private var ultimoTotalLogado:
-        Int? =
-        null
-
-    private var ultimaQuantidade =
-        0
-
-    private var ultimoNavigationTime =
+    private var lastGestureTime =
         0L
 
-    private var ultimoGestureTime =
-        0L
-
-    private var ultimoNovoPacoteTime =
+    private var lastNewPackageTime =
         SystemClock.elapsedRealtime()
 
-    private var ultimoFingerprint =
-        ""
-
-    private var mesmaViewport =
+    private var stagnantPasses =
         0
 
-    private val scanRunnable =
-        Runnable {
-            executarScan()
-        }
+    private var loginWarningShown =
+        false
+
+    private var photoWarningShown =
+        false
+
+    private var returnInProgress =
+        false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -103,1005 +62,1009 @@ class SpxAccessibilityService :
     override fun onAccessibilityEvent(
         event: AccessibilityEvent?
     ) {
-
-        if (event == null) {
-            return
-        }
-
-        val packageName =
-            event.packageName
-                ?.toString()
-                ?: return
-
         if (
-            packageName !=
+            event?.packageName
+                ?.toString() !=
             SPX_PACKAGE
         ) {
             return
         }
 
-        if (
-            importCompleted &&
-            SpxSessionState.state.value ==
-            SpxState.UNKNOWN
+        when (
+            SpxSessionState
+                .automationMode
+                .value
         ) {
-            resetInternal()
-        }
+            SpxAutomationMode.IMPORT_ROUTE -> {
+                schedule {
+                    scanImport()
+                }
+            }
 
-        if (importCompleted) {
-            return
-        }
+            SpxAutomationMode.OUT_OF_ROUTE -> {
+                schedule {
+                    scanOutOfRoute()
+                }
+            }
 
-        scheduleScan(
-            180L
-        )
+            SpxAutomationMode.NONE -> Unit
+        }
     }
 
-    private fun scheduleScan(
-        delay: Long = SCAN_DELAY
+    private fun schedule(
+        delay: Long = 250L,
+        action: () -> Unit
     ) {
-
-        handler.removeCallbacks(
-            scanRunnable
-        )
-
         handler.postDelayed(
-            scanRunnable,
+            action,
             delay
         )
     }
 
-    private fun executarScan() {
-
-        if (importCompleted) {
+    private fun scanImport() {
+        if (
+            SpxSessionState
+                .automationMode
+                .value !=
+            SpxAutomationMode.IMPORT_ROUTE
+        ) {
             return
         }
 
         val root =
             rootInActiveWindow
-                ?: run {
+                ?: return
 
-                    alterarEstado(
-                        SpxState.WAITING_CONTENT,
-                        "Aguardando SPX..."
-                    )
+        val texts =
+            collectTexts(root)
 
-                    scheduleScan()
-
-                    return
-                }
-
-        val textos =
-            mutableListOf<String>()
-
-        coletarTextos(
-            root,
-            textos
-        )
-
-        if (textos.isEmpty()) {
-
-            scheduleScan()
-
+        if (
+            texts.isEmpty()
+        ) {
             return
         }
 
-        val tela =
-            textos
-                .joinToString(" ")
-                .lowercase()
+        val fullText =
+            texts.joinToString(" ")
 
-        // ==================================================
-        // LOGIN
-        // ==================================================
+        val lower =
+            fullText.lowercase()
 
         if (
-            pareceTelaLogin(
-                tela
-            )
+            looksLikeLogin(lower)
         ) {
-
-            alterarEstado(
+            SpxSessionState.setState(
                 SpxState.LOGIN_REQUIRED,
-                "Faça login normalmente no SPX."
+                "Faça o login no SPX."
             )
 
-            if (!loginAvisado) {
-
-                loginAvisado =
+            if (
+                !loginWarningShown
+            ) {
+                loginWarningShown =
                     true
 
                 Toast.makeText(
                     applicationContext,
-                    "Faça login no SPX. O Copilot continua automaticamente.",
+                    "Faça o login normalmente no SPX. Depois o Copilot continuará sozinho.",
                     Toast.LENGTH_LONG
                 ).show()
             }
 
-            scheduleScan(
-                900L
-            )
-
             return
         }
 
-        loginAvisado =
+        loginWarningShown =
             false
 
-        // ==================================================
-        // TOTAL REAL DA ROTA
-        // ==================================================
-
-        val total =
-            encontrarTotalPedidos(
-                textos
-            )
-
-        if (total != null) {
-
-            SpxSessionState
-                .updateTotalEsperado(
-                    total
-                )
-
-            if (
-                ultimoTotalLogado !=
-                total
-            ) {
-
-                ultimoTotalLogado =
-                    total
-
-                Log.d(
-                    TAG,
-                    "TOTAL_ESPERADO=$total"
-                )
-            }
-        }
-
-        // ==================================================
-        // AT
-        // ==================================================
-
         val at =
-            encontrarAT(
-                textos
+            findAt(
+                fullText
             )
-
-        if (at != null) {
-
-            SpxSessionState
-                .updateAtCode(
-                    at
-                )
-
-            SpxSessionState
-                .updateDataCarregamento(
-                    extrairDataAT(
-                        at
-                    )
-                )
-
-            if (
-                ultimoAt !=
-                at
-            ) {
-
-                ultimoAt =
-                    at
-
-                Log.d(
-                    TAG,
-                    "ROTA_AT=DETECTADA"
-                )
-            }
-        }
-
-        // ==================================================
-        // PEDIDOS + ENDEREÇOS
-        // ==================================================
-
-        val encontrados =
-            encontrarPacotes(
-                root,
-                textos
-            )
-
-        val fingerprint =
-            encontrados
-                .keys
-                .sorted()
-                .joinToString("|")
 
         if (
-            fingerprint.isNotBlank() &&
-            fingerprint ==
-            ultimoFingerprint
+            at != null
         ) {
+            SpxSessionState.setAt(
+                at
+            )
 
-            mesmaViewport++
-
-        } else if (
-            fingerprint.isNotBlank()
-        ) {
-
-            ultimoFingerprint =
-                fingerprint
-
-            mesmaViewport =
-                0
+            SpxSessionState.setLoadDate(
+                parseDateFromAt(
+                    at
+                )
+            )
         }
 
-        val novos =
-            SpxSessionState
-                .addOrUpdatePackages(
-                    encontrados
-                )
+        val expected =
+            findExpectedTotal(
+                fullText
+            )
 
-        val quantidade =
+        SpxSessionState.setExpectedTotal(
+            expected
+        )
+
+        val visibleBrs =
+            findBrs(
+                texts
+            )
+
+        val newCount =
+            SpxSessionState.addBrs(
+                visibleBrs
+            )
+
+        val count =
             SpxSessionState
                 .packageCount
                 .value
 
-        val totalEsperado =
+        val expectedNow =
             SpxSessionState
                 .totalEsperado
                 .value
 
-        if (novos > 0) {
+        if (
+            newCount > 0
+        ) {
+            stagnantPasses =
+                0
 
-            ultimoNovoPacoteTime =
+            lastNewPackageTime =
                 SystemClock.elapsedRealtime()
 
-            mesmaViewport =
-                0
+            Log.d(
+                TAG,
+                "PACOTES_TOTAL=$count"
+            )
+        } else if (
+            count > 0
+        ) {
+            stagnantPasses++
         }
 
         if (
-            quantidade !=
-            ultimaQuantidade
+            expectedNow != null &&
+            expectedNow > 0 &&
+            count >= expectedNow
         ) {
-
-            ultimaQuantidade =
-                quantidade
-
-            Log.d(
-                TAG,
-                "PACOTES_TOTAL=$quantidade"
-            )
-        }
-
-        // ==================================================
-        // FINAL CORRETO PELO TOTAL
-        // ==================================================
-
-        if (
-            totalEsperado != null &&
-            totalEsperado > 0 &&
-            quantidade >=
-            totalEsperado
-        ) {
-
-            Log.d(
-                TAG,
-                "FIM=TOTAL_ATINGIDO"
-            )
-
-            concluirImportacao()
+            completeImport()
 
             return
         }
 
-        // ==================================================
-        // JÁ ESTAMOS NA LISTA
-        // ==================================================
-
-        if (quantidade > 0) {
-
-            alterarEstado(
+        if (
+            count > 0
+        ) {
+            SpxSessionState.setState(
                 SpxState.SCANNING_PACKAGES,
                 if (
-                    totalEsperado != null
+                    expectedNow != null
                 ) {
-                    "Lendo pedidos: $quantidade de $totalEsperado"
+                    "Importando $count de $expectedNow"
                 } else {
-                    "Lendo pedidos: $quantidade encontrados"
+                    "Importando $count pedidos"
                 }
             )
 
-            /*
-             * Se a viewport ficou igual duas vezes,
-             * não confiamos no ACTION_SCROLL_FORWARD.
-             *
-             * Forçamos swipe físico.
-             */
-            val forceGesture =
-                mesmaViewport >= 2
+            val moved =
+                scrollNode(
+                    root
+                ) ||
+                swipeUp()
 
-            var movimentou =
-                false
-
-            if (!forceGesture) {
-
-                movimentou =
-                    tentarScrollNode(
-                        root
-                    )
-
-                if (movimentou) {
-
-                    Log.d(
-                        TAG,
-                        "SCROLL=NODE"
-                    )
-                }
-            }
-
-            if (!movimentou) {
-
-                movimentou =
-                    tentarSwipe()
-
-                if (movimentou) {
-
-                    Log.d(
-                        TAG,
-                        "SCROLL=GESTURE"
-                    )
-                }
-            }
-
-            /*
-             * Se conhecemos o total, NUNCA finalizamos
-             * antes dele.
-             */
             if (
-                totalEsperado == null
+                !moved &&
+                expectedNow == null &&
+                stagnantPasses >= 20 &&
+                SystemClock.elapsedRealtime() -
+                lastNewPackageTime >
+                15000L
             ) {
+                completeImport()
+            }
 
-                verificarFimSemTotal(
-                    quantidade
+            return
+        }
+
+        if (
+            at != null
+        ) {
+            SpxSessionState.setState(
+                SpxState.ROUTE_DETECTED,
+                "Rota encontrada. Abrindo pedidos..."
+            )
+
+            findText(
+                root,
+                at,
+                exact = true
+            )?.let {
+                clickSelfOrParent(
+                    it
                 )
             }
 
-            scheduleScan(
-                1000L
-            )
-
             return
         }
-
-        // ==================================================
-        // AT ENCONTRADA
-        // ==================================================
-
-        if (at != null) {
-
-            alterarEstado(
-                SpxState.ROUTE_DETECTED,
-                "Abrindo rota..."
-            )
-
-            tentarAbrirAT(
-                root,
-                at
-            )
-
-            scheduleScan(
-                900L
-            )
-
-            return
-        }
-
-        // ==================================================
-        // PROCURAR ENTREGAS
-        // ==================================================
 
         if (
-            pareceTelaAutenticada(
-                tela
+            lower.contains(
+                "entrega"
+            ) ||
+            lower.contains(
+                "em rota"
             )
         ) {
-
-            alterarEstado(
+            SpxSessionState.setState(
                 SpxState.FINDING_ROUTE,
                 "Localizando rota..."
             )
 
-            tentarAbrirEntregas(
-                root
+            findText(
+                root,
+                "Entrega",
+                exact = false
+            )?.let {
+                clickSelfOrParent(
+                    it
+                )
+            }
+        }
+    }
+
+    private fun completeImport() {
+        if (
+            returnInProgress
+        ) {
+            return
+        }
+
+        returnInProgress =
+            true
+
+        val total =
+            SpxSessionState
+                .packageCount
+                .value
+
+        SpxSessionState.setState(
+            SpxState.IMPORT_COMPLETE,
+            "Importação concluída."
+        )
+
+        Log.d(
+            TAG,
+            "IMPORT_COMPLETE | TOTAL=$total"
+        )
+
+        val intent =
+            Intent(
+                this,
+                MainActivity::class.java
+            ).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                )
+
+                putExtra(
+                    "OPEN_ROUTE_MANAGEMENT",
+                    true
+                )
+            }
+
+        try {
+            startActivity(
+                intent
             )
 
-            scheduleScan(
+            handler.postDelayed(
+                {
+                    val activePackage =
+                        rootInActiveWindow
+                            ?.packageName
+                            ?.toString()
+
+                    if (
+                        activePackage ==
+                        SPX_PACKAGE
+                    ) {
+                        performGlobalAction(
+                            GLOBAL_ACTION_HOME
+                        )
+
+                        handler.postDelayed(
+                            {
+                                try {
+                                    startActivity(
+                                        intent
+                                    )
+                                } catch (
+                                    e: Exception
+                                ) {
+                                    Log.e(
+                                        TAG,
+                                        "RETORNO_COPILOT_2",
+                                        e
+                                    )
+                                }
+                            },
+                            350L
+                        )
+                    }
+
+                    SpxSessionState
+                        .finishImport()
+
+                    returnInProgress =
+                        false
+                },
                 900L
             )
+        } catch (
+            e: Exception
+        ) {
+            returnInProgress =
+                false
+
+            Log.e(
+                TAG,
+                "RETORNO_COPILOT",
+                e
+            )
+        }
+    }
+
+    private fun scanOutOfRoute() {
+        val root =
+            rootInActiveWindow
+                ?: return
+
+        val texts =
+            collectTexts(root)
+
+        val fullText =
+            texts.joinToString(" ")
+
+        val lower =
+            fullText.lowercase()
+
+        val targetBr =
+            SpxSessionState
+                .targetBr
+                .value
+
+        if (
+            looksLikeLogin(lower)
+        ) {
+            return
+        }
+
+        if (
+            lower.contains(
+                "motivo da ocorrência"
+            ) ||
+            lower.contains(
+                "motivo da ocorrencia"
+            )
+        ) {
+            val outside =
+                findText(
+                    root,
+                    "Fora de Rota",
+                    exact = true
+                )
+
+            if (
+                outside == null
+            ) {
+                if (
+                    !scrollNode(root)
+                ) {
+                    swipeUp()
+                }
+
+                return
+            }
+
+            clickSelfOrParent(
+                outside
+            )
+
+            SpxSessionState
+                .setOccurrencePhase(
+                    OccurrencePhase.REASON_SELECTED
+                )
+
+            schedule(
+                500L
+            ) {
+                rootInActiveWindow
+                    ?.let { current ->
+                        (
+                            findText(
+                                current,
+                                "Próximo",
+                                true
+                            )
+                                ?: findText(
+                                    current,
+                                    "Proximo",
+                                    true
+                                )
+                            )?.let {
+                                clickSelfOrParent(
+                                    it
+                                )
+                            }
+                    }
+            }
 
             return
         }
 
-        alterarEstado(
-            SpxState.CHECKING_SESSION,
-            "Verificando SPX..."
-        )
-
-        scheduleScan(
-            900L
-        )
-    }
-
-    // ======================================================
-    // TOTAL DE PEDIDOS
-    // ======================================================
-
-    private fun encontrarTotalPedidos(
-        textos: List<String>
-    ): Int? {
-
-        var maior:
-            Int? =
-            null
-
-        fun considerar(
-            valor: Int?
+        if (
+            lower.contains(
+                "comprovante de ocorrência"
+            ) ||
+            lower.contains(
+                "comprovante de ocorrencia"
+            )
         ) {
+            fillFirstEditable(
+                root,
+                "FORA DE ROTA"
+            )
+
+            val invalid =
+                lower.contains(
+                    "não encontramos o código do pacote"
+                ) ||
+                lower.contains(
+                    "nao encontramos o codigo do pacote"
+                )
 
             if (
-                valor == null ||
-                valor <= 0 ||
-                valor > 1000
+                invalid
             ) {
+                SpxSessionState
+                    .setOccurrencePhase(
+                        OccurrencePhase.INVALID_PHOTO
+                    )
+
                 return
             }
 
+            val photos =
+                Regex(
+                    """\b(\d+)\s*/\s*3\b"""
+                )
+                    .find(
+                        fullText
+                    )
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.toIntOrNull()
+                    ?: 0
+
             if (
-                maior == null ||
-                valor > maior!!
+                photos < 1
             ) {
-                maior = valor
-            }
-        }
-
-        val tudo =
-            textos.joinToString(
-                " | "
-            )
-
-        /*
-         * 3/5
-         * 64 / 66
-         */
-        Regex(
-            """(?<!\d)(\d{1,4})\s*/\s*(\d{1,4})(?!\d)"""
-        )
-            .findAll(tudo)
-            .forEach {
-
-                val atual =
-                    it.groupValues[1]
-                        .toIntOrNull()
-
-                val total =
-                    it.groupValues[2]
-                        .toIntOrNull()
+                SpxSessionState
+                    .setOccurrencePhase(
+                        OccurrencePhase.WAITING_PHOTO
+                    )
 
                 if (
-                    atual != null &&
-                    total != null &&
-                    atual <= total
+                    !photoWarningShown
                 ) {
+                    photoWarningShown =
+                        true
 
-                    considerar(
-                        total
+                    Toast.makeText(
+                        applicationContext,
+                        "Tire a foto real do pacote com o código visível. Depois o Copilot continua.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+
+                return
+            }
+
+            photoWarningShown =
+                false
+
+            findText(
+                root,
+                "Confirmar",
+                true
+            )?.let {
+                if (
+                    clickSelfOrParent(
+                        it
                     )
+                ) {
+                    SpxSessionState
+                        .setOccurrencePhase(
+                            OccurrencePhase.CONFIRMING
+                        )
                 }
             }
 
-        /*
-         * "5 pedidos"
-         */
-        Regex(
-            """(?<!\d)(\d{1,4})\s*(?:pedidos?|pacotes?|entregas?)\b""",
-            RegexOption.IGNORE_CASE
-        )
-            .findAll(tudo)
-            .forEach {
-
-                considerar(
-                    it.groupValues[1]
-                        .toIntOrNull()
-                )
-            }
-
-        /*
-         * "Pedidos: 5"
-         */
-        Regex(
-            """\b(?:pedidos?|pacotes?|entregas?)\s*[:\-]?\s*(\d{1,4})(?!\d)""",
-            RegexOption.IGNORE_CASE
-        )
-            .findAll(tudo)
-            .forEach {
-
-                considerar(
-                    it.groupValues[1]
-                        .toIntOrNull()
-                )
-            }
-
-        /*
-         * Alguns apps colocam:
-         *
-         * TextView = PEDIDOS
-         * próximo TextView = 5
-         */
-        for (
-            i in 0 until
-                textos.size - 1
-        ) {
-
-            val primeiro =
-                textos[i]
-                    .trim()
-                    .lowercase()
-
-            val segundo =
-                textos[i + 1]
-                    .trim()
-
-            if (
-                primeiro.matches(
-                    Regex(
-                        """pedidos?|pacotes?|entregas?"""
-                    )
-                )
-            ) {
-
-                considerar(
-                    segundo
-                        .toIntOrNull()
-                )
-            }
-
-            val numero =
-                textos[i]
-                    .trim()
-                    .toIntOrNull()
-
-            val label =
-                textos[i + 1]
-                    .trim()
-                    .lowercase()
-
-            if (
-                numero != null &&
-                label.matches(
-                    Regex(
-                        """pedidos?|pacotes?|entregas?"""
-                    )
-                )
-            ) {
-
-                considerar(
-                    numero
-                )
-            }
+            return
         }
 
-        return maior
+        if (
+            lower.contains(
+                "informações do pedido"
+            ) ||
+            lower.contains(
+                "informacoes do pedido"
+            )
+        ) {
+            if (
+                targetBr == null ||
+                lower.contains(
+                    targetBr.lowercase()
+                )
+            ) {
+                (
+                    findText(
+                        root,
+                        "Ocorrência",
+                        true
+                    )
+                        ?: findText(
+                            root,
+                            "Ocorrencia",
+                            true
+                        )
+                    )?.let {
+                        clickSelfOrParent(
+                            it
+                        )
+                    }
+            }
+
+            return
+        }
+
+        if (
+            SpxSessionState
+                .occurrencePhase
+                .value ==
+            OccurrencePhase.CONFIRMING &&
+            (
+                lower.contains(
+                    "em rota"
+                ) ||
+                lower.contains(
+                    "entrega"
+                )
+                )
+        ) {
+            SpxSessionState
+                .finishOutOfRoute()
+
+            returnToCopilot()
+
+            return
+        }
+
+        if (
+            targetBr != null &&
+            lower.contains(
+                "em rota"
+            )
+        ) {
+            val node =
+                findText(
+                    root,
+                    targetBr,
+                    true
+                )
+
+            if (
+                node != null
+            ) {
+                clickSelfOrParent(
+                    node
+                )
+            } else {
+                if (
+                    !scrollNode(root)
+                ) {
+                    swipeUp()
+                }
+            }
+        }
     }
 
-    // ======================================================
-    // AT
-    // ======================================================
+    private fun returnToCopilot() {
+        val intent =
+            Intent(
+                this,
+                MainActivity::class.java
+            ).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                )
 
-    private fun encontrarAT(
-        textos: List<String>
-    ): String? {
+                putExtra(
+                    "OPEN_ROUTE_MANAGEMENT",
+                    true
+                )
+            }
 
-        val regex =
-            Regex(
-                """\bAT[A-Z0-9]{8,}\b""",
-                RegexOption.IGNORE_CASE
+        try {
+            startActivity(
+                intent
             )
+        } catch (
+            e: Exception
+        ) {
+            Log.e(
+                TAG,
+                "RETORNO_OCORRENCIA",
+                e
+            )
+        }
+    }
 
-        textos.forEach {
-
-            val texto =
-                it.replace(
+    private fun findAt(
+        text: String
+    ): String? {
+        return Regex(
+            """\bAT[A-Z0-9]{8,}\b""",
+            RegexOption.IGNORE_CASE
+        )
+            .find(
+                text.replace(
                     " ",
                     ""
                 )
-                    .uppercase()
+            )
+            ?.value
+            ?.uppercase()
+    }
 
-            val match =
-                regex.find(
-                    texto
+    private fun findExpectedTotal(
+        text: String
+    ): Int? {
+        val emRota =
+            Regex(
+                """\bEm\s+Rota\s*\(\s*(\d{1,4})\s*\)""",
+                RegexOption.IGNORE_CASE
+            )
+                .find(
+                    text
+                )
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+
+        if (
+            emRota != null &&
+            emRota > 0
+        ) {
+            return emRota
+        }
+
+        val fraction =
+            Regex(
+                """(?<!\d)(\d{1,4})\s*/\s*(\d{1,4})(?!\d)"""
+            )
+                .find(
+                    text
                 )
 
-            if (match != null) {
+        val current =
+            fraction
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
 
-                return match
-                    .value
-                    .uppercase()
-            }
+        val total =
+            fraction
+                ?.groupValues
+                ?.getOrNull(2)
+                ?.toIntOrNull()
+
+        if (
+            current != null &&
+            total != null &&
+            total > 3 &&
+            current <= total
+        ) {
+            return total
         }
 
         return null
     }
 
-    // ======================================================
-    // BR + ENDEREÇO
-    // ======================================================
+    private fun findBrs(
+        texts: List<String>
+    ): Set<String> {
+        val regex =
+            Regex(
+                """\bBR[A-Z0-9]{8,}\b""",
+                RegexOption.IGNORE_CASE
+            )
 
-    private fun encontrarPacotes(
-        root: AccessibilityNodeInfo,
-        textosTela: List<String>
-    ): Map<String, String?> {
+        val result =
+            linkedSetOf<String>()
 
-        val encontrados =
-            linkedMapOf<String, String?>()
+        texts.forEach { text ->
+            regex.findAll(
+                text
+                    .replace(
+                        " ",
+                        ""
+                    )
+                    .replace(
+                        "\n",
+                        ""
+                    )
+            ).forEach {
+                result +=
+                    it.value.uppercase()
+            }
+        }
 
-        percorrerNodes(
-            root
-        ) { node ->
+        return result
+    }
 
-            if (node.isPassword) {
-                return@percorrerNodes
+    private fun collectTexts(
+        root: AccessibilityNodeInfo
+    ): List<String> {
+        val result =
+            mutableListOf<String>()
+
+        fun walk(
+            node: AccessibilityNodeInfo?
+        ) {
+            if (
+                node == null
+            ) {
+                return
             }
 
-            val valores =
-                listOfNotNull(
+            if (
+                !node.isPassword
+            ) {
+                node.text
+                    ?.toString()
+                    ?.trim()
+                    ?.takeIf {
+                        it.isNotBlank()
+                    }
+                    ?.let {
+                        result += it
+                    }
+
+                node.contentDescription
+                    ?.toString()
+                    ?.trim()
+                    ?.takeIf {
+                        it.isNotBlank()
+                    }
+                    ?.let {
+                        result += it
+                    }
+            }
+
+            for (
+                index in
+                0 until node.childCount
+            ) {
+                walk(
+                    node.getChild(index)
+                )
+            }
+        }
+
+        walk(
+            root
+        )
+
+        return result
+    }
+
+    private fun findText(
+        node: AccessibilityNodeInfo?,
+        target: String,
+        exact: Boolean
+    ): AccessibilityNodeInfo? {
+        if (
+            node == null
+        ) {
+            return null
+        }
+
+        if (
+            !node.isPassword
+        ) {
+            val values =
+                listOf(
                     node.text
                         ?.toString(),
                     node.contentDescription
                         ?.toString()
                 )
 
-            valores.forEach { valor ->
-
-                encontrarBRs(
-                    valor
-                )
-                    .forEach { br ->
-
-                        val endereco =
-                            encontrarEnderecoProximo(
-                                node,
-                                br
+            val matches =
+                values.any { value ->
+                    if (
+                        value == null
+                    ) {
+                        false
+                    } else if (
+                        exact
+                    ) {
+                        value
+                            .trim()
+                            .equals(
+                                target,
+                                ignoreCase = true
                             )
-
-                        val existente =
-                            encontrados[br]
-
-                        if (
-                            existente.isNullOrBlank() ||
-                            !endereco.isNullOrBlank()
-                        ) {
-
-                            encontrados[br] =
-                                endereco
-                        }
+                    } else {
+                        value.contains(
+                            target,
+                            ignoreCase = true
+                        )
                     }
-            }
-        }
-
-        /*
-         * Tela de detalhes:
-         * se só existe um BR visível, tenta associar
-         * um endereço presente em qualquer região da tela.
-         */
-        if (
-            encontrados.size == 1
-        ) {
-
-            val br =
-                encontrados.keys.first()
+                }
 
             if (
-                encontrados[br]
-                    .isNullOrBlank()
+                matches
             ) {
-
-                selecionarEndereco(
-                    textosTela,
-                    br
-                )?.let {
-
-                    encontrados[br] =
-                        it
-                }
+                return node
             }
         }
 
-        return encontrados
-    }
-
-    private fun encontrarBRs(
-        texto: String
-    ): Set<String> {
-
-        val resultado =
-            linkedSetOf<String>()
-
-        Regex(
-            """\bBR[A-Z0-9]{8,}\b""",
-            RegexOption.IGNORE_CASE
-        )
-            .findAll(
-                texto
-                    .replace(
-                        " ",
-                        ""
-                    )
-                    .uppercase()
-            )
-            .forEach {
-
-                resultado.add(
-                    it.value
-                        .uppercase()
+        for (
+            index in
+            0 until node.childCount
+        ) {
+            val result =
+                findText(
+                    node.getChild(index),
+                    target,
+                    exact
                 )
+
+            if (
+                result != null
+            ) {
+                return result
             }
-
-        return resultado
-    }
-
-    private fun encontrarEnderecoProximo(
-        original: AccessibilityNodeInfo,
-        br: String
-    ): String? {
-
-        var node:
-            AccessibilityNodeInfo? =
-            original
-
-        repeat(5) {
-
-            if (node == null) {
-                return@repeat
-            }
-
-            val textos =
-                mutableListOf<String>()
-
-            coletarTextos(
-                node,
-                textos
-            )
-
-            selecionarEndereco(
-                textos,
-                br
-            )?.let {
-
-                return it
-            }
-
-            node =
-                node?.parent
         }
 
         return null
     }
 
-    private fun selecionarEndereco(
-        textos: List<String>,
-        br: String
-    ): String? {
-
-        val ignorar =
-            listOf(
-                "entregue",
-                "ocorrência",
-                "ocorrencia",
-                "escanear",
-                "ligar",
-                "mensagem",
-                "telefone",
-                "pedido",
-                "pedidos",
-                "rota",
-                "iniciar entregas",
-                "voltar",
-                br.lowercase()
-            )
-
-        val linhas =
-            textos
-                .map {
-                    it.trim()
-                }
-                .filter {
-                    it.length >= 4
-                }
-                .distinct()
-                .filter { linha ->
-
-                    val lower =
-                        linha.lowercase()
-
-                    ignorar.none {
-                        lower ==
-                            it ||
-                            lower.startsWith(
-                                "$it:"
-                            )
-                    }
-                }
-
-        val ruaRegex =
-            Regex(
-                """\b(rua|r\.|avenida|av\.|travessa|tv\.|passagem|estrada|rodovia|alameda|conjunto|residencial|vila|br-\d+)\b""",
-                RegexOption.IGNORE_CASE
-            )
-
-        val indice =
-            linhas.indexOfFirst {
-                ruaRegex.containsMatchIn(
-                    it
-                )
-            }
-
-        if (indice >= 0) {
-
-            return linhas
-                .drop(indice)
-                .take(3)
-                .joinToString(
-                    ", "
-                )
-                .take(240)
-        }
-
-        /*
-         * Fallback: linha com número + CEP/localidade.
-         */
-        val alternativa =
-            linhas.firstOrNull {
-
-                it.any(
-                    Char::isDigit
-                ) &&
-                    (
-                        it.contains(",") ||
-                            it.contains("-")
-                        )
-            }
-
-        return alternativa
-    }
-
-    // ======================================================
-    // SCROLL
-    // ======================================================
-
-    private fun tentarScrollNode(
-        root: AccessibilityNodeInfo
+    private fun clickSelfOrParent(
+        start: AccessibilityNodeInfo
     ): Boolean {
+        var current:
+            AccessibilityNodeInfo? =
+            start
 
-        val scrollables =
-            mutableListOf<AccessibilityNodeInfo>()
-
-        percorrerNodes(
-            root
-        ) {
-
-            if (it.isScrollable) {
-
-                scrollables.add(
-                    it
-                )
-            }
-        }
-
-        val ordenados =
-            scrollables
-                .sortedByDescending {
-
-                    val rect =
-                        Rect()
-
-                    it.getBoundsInScreen(
-                        rect
-                    )
-
-                    rect.height()
-                }
-
-        ordenados.forEach {
-
-            try {
-
-                if (
-                    it.performAction(
+        repeat(8) {
+            if (
+                current?.isClickable ==
+                true &&
+                current?.isEnabled ==
+                true
+            ) {
+                return try {
+                    current?.performAction(
                         AccessibilityNodeInfo
-                            .ACTION_SCROLL_FORWARD
-                    )
+                            .ACTION_CLICK
+                    ) == true
+                } catch (
+                    _: Exception
                 ) {
-
-                    return true
+                    false
                 }
-
-            } catch (_: Exception) {
             }
+
+            current =
+                current?.parent
         }
 
         return false
     }
 
-    private fun tentarSwipe(): Boolean {
+    private fun scrollNode(
+        root: AccessibilityNodeInfo
+    ): Boolean {
+        val scrollables =
+            mutableListOf<
+                AccessibilityNodeInfo
+            >()
 
-        val agora =
+        fun walk(
+            node: AccessibilityNodeInfo?
+        ) {
+            if (
+                node == null
+            ) {
+                return
+            }
+
+            if (
+                node.isScrollable
+            ) {
+                scrollables +=
+                    node
+            }
+
+            for (
+                index in
+                0 until node.childCount
+            ) {
+                walk(
+                    node.getChild(index)
+                )
+            }
+        }
+
+        walk(root)
+
+        return scrollables.any {
+            try {
+                it.performAction(
+                    AccessibilityNodeInfo
+                        .ACTION_SCROLL_FORWARD
+                )
+            } catch (
+                _: Exception
+            ) {
+                false
+            }
+        }
+    }
+
+    private fun swipeUp(): Boolean {
+        val now =
             SystemClock.elapsedRealtime()
 
         if (
-            agora -
-            ultimoGestureTime <
-            700L
+            now -
+            lastGestureTime <
+            750L
         ) {
-
             return false
         }
 
-        ultimoGestureTime =
-            agora
+        lastGestureTime =
+            now
 
-        val largura =
-            resources
-                .displayMetrics
-                .widthPixels
-                .toFloat()
-
-        val altura =
-            resources
-                .displayMetrics
-                .heightPixels
-                .toFloat()
-
-        /*
-         * Alterna posição horizontal.
-         * Ajuda em telas onde o centro intercepta
-         * algum componente.
-         */
-        val posicoes =
-            floatArrayOf(
-                0.50f,
-                0.75f,
-                0.25f
-            )
-
-        val indice =
-            (
-                (
-                    agora /
-                        1000L
-                    ) %
-                    posicoes.size
-                )
-                .toInt()
-
-        val x =
-            largura *
-                posicoes[indice]
-
-        val inicio =
-            altura * 0.80f
-
-        val fim =
-            altura * 0.25f
+        val metrics =
+            resources.displayMetrics
 
         val path =
             Path().apply {
-
                 moveTo(
-                    x,
-                    inicio
+                    metrics.widthPixels *
+                        0.50f,
+                    metrics.heightPixels *
+                        0.78f
                 )
 
                 lineTo(
-                    x,
-                    fim
+                    metrics.widthPixels *
+                        0.50f,
+                    metrics.heightPixels *
+                        0.28f
                 )
             }
 
@@ -1113,688 +1076,178 @@ class SpxAccessibilityService :
                         .StrokeDescription(
                             path,
                             0L,
-                            480L
+                            420L
                         )
                 )
                 .build()
 
         return try {
-
             dispatchGesture(
                 gesture,
                 null,
                 handler
             )
-
-        } catch (_: Exception) {
-
+        } catch (
+            _: Exception
+        ) {
             false
         }
     }
 
-    private fun verificarFimSemTotal(
-        quantidade: Int
-    ) {
-
-        if (
-            quantidade <= 0
-        ) {
-            return
-        }
-
-        val tempoSemNovo =
-            SystemClock.elapsedRealtime() -
-                ultimoNovoPacoteTime
-
-        if (
-            mesmaViewport >=
-            SAME_VIEW_LIMIT &&
-            tempoSemNovo >=
-            MIN_NO_NEW_TIME
-        ) {
-
-            Log.d(
-                TAG,
-                "FIM=LISTA_CONFIRMADA | TOTAL=$quantidade"
-            )
-
-            concluirImportacao()
-        }
-    }
-
-    // ======================================================
-    // NAVEGAÇÃO SPX
-    // ======================================================
-
-    private fun tentarAbrirEntregas(
-        root: AccessibilityNodeInfo
-    ) {
-
-        if (!podeNavegar()) {
-            return
-        }
-
-        listOf(
-            "entregas",
-            "entrega"
-        )
-            .forEach {
-
-                val node =
-                    encontrarNodeTexto(
-                        root,
-                        it,
-                        false
-                    )
-
-                if (
-                    node != null &&
-                    clicarNodeOuPai(
-                        node
-                    )
-                ) {
-
-                    ultimoNavigationTime =
-                        SystemClock
-                            .elapsedRealtime()
-
-                    Log.d(
-                        TAG,
-                        "NAV=ENTREGAS"
-                    )
-
-                    return
-                }
-            }
-    }
-
-    private fun tentarAbrirAT(
+    private fun fillFirstEditable(
         root: AccessibilityNodeInfo,
-        at: String
+        value: String
     ) {
-
-        if (!podeNavegar()) {
-            return
-        }
-
-        val node =
-            encontrarNodeTexto(
-                root,
-                at,
-                true
-            )
-
-        if (
-            node != null &&
-            clicarNodeOuPai(
-                node
-            )
-        ) {
-
-            ultimoNavigationTime =
-                SystemClock
-                    .elapsedRealtime()
-
-            Log.d(
-                TAG,
-                "NAV=ROTA"
-            )
-        }
-    }
-
-    private fun podeNavegar(): Boolean {
-
-        return (
-            SystemClock.elapsedRealtime() -
-                ultimoNavigationTime
-            ) >=
-            NAV_DELAY
-    }
-
-    private fun encontrarNodeTexto(
-        node: AccessibilityNodeInfo?,
-        procurado: String,
-        exato: Boolean
-    ): AccessibilityNodeInfo? {
-
-        if (node == null) {
-            return null
-        }
-
-        if (!node.isPassword) {
-
-            val valores =
-                listOfNotNull(
-                    node.text
-                        ?.toString(),
-                    node.contentDescription
-                        ?.toString()
-                )
-
-            valores.forEach {
-
-                val bate =
-                    if (exato) {
-
-                        it.trim()
-                            .equals(
-                                procurado,
-                                true
-                            )
-
-                    } else {
-
-                        it.contains(
-                            procurado,
-                            true
-                        )
-                    }
-
-                if (bate) {
-
-                    return node
-                }
-            }
-        }
-
-        for (
-            i in 0 until
-                node.childCount
-        ) {
-
-            encontrarNodeTexto(
-                node.getChild(i),
-                procurado,
-                exato
-            )?.let {
-
-                return it
-            }
-        }
-
-        return null
-    }
-
-    private fun clicarNodeOuPai(
-        original: AccessibilityNodeInfo
-    ): Boolean {
-
-        var node:
-            AccessibilityNodeInfo? =
-            original
-
-        repeat(7) {
-
-            if (node == null) {
+        fun walk(
+            node: AccessibilityNodeInfo?
+        ): Boolean {
+            if (
+                node == null
+            ) {
                 return false
             }
 
             if (
-                node?.isClickable ==
-                true
+                !node.isPassword &&
+                node.isEditable &&
+                node.isEnabled
             ) {
+                val current =
+                    node.text
+                        ?.toString()
+                        ?.trim()
+                        .orEmpty()
 
-                return try {
+                if (
+                    current.equals(
+                        value,
+                        ignoreCase = true
+                    )
+                ) {
+                    return true
+                }
 
-                    node!!.performAction(
+                val args =
+                    Bundle().apply {
+                        putCharSequence(
+                            AccessibilityNodeInfo
+                                .ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                            value
+                        )
+                    }
+
+                if (
+                    node.performAction(
                         AccessibilityNodeInfo
-                            .ACTION_CLICK
+                            .ACTION_SET_TEXT,
+                        args
                     )
-
-                } catch (_: Exception) {
-
-                    false
+                ) {
+                    return true
                 }
             }
 
-            node =
-                node?.parent
-        }
-
-        return false
-    }
-
-    // ======================================================
-    // RETORNO AO ROUTECOPILOT
-    // ======================================================
-
-    private fun concluirImportacao() {
-
-        if (importCompleted) {
-            return
-        }
-
-        val quantidade =
-            SpxSessionState
-                .packageCount
-                .value
-
-        if (
-            quantidade <= 0
-        ) {
-            return
-        }
-
-        importCompleted =
-            true
-
-        handler.removeCallbacks(
-            scanRunnable
-        )
-
-        SpxSessionState
-            .updateState(
-                SpxState.IMPORT_COMPLETE
-            )
-
-        SpxSessionState
-            .updateMessage(
-                "Importação concluída."
-            )
-
-        Log.d(
-            TAG,
-            "IMPORT_COMPLETE | TOTAL=$quantidade"
-        )
-
-        Toast.makeText(
-            applicationContext,
-            "$quantidade pedidos importados",
-            Toast.LENGTH_SHORT
-        ).show()
-
-        retornarAoCopilot()
-    }
-
-    private fun retornarAoCopilot() {
-
-        SpxSessionState
-            .updateState(
-                SpxState.RETURNING_TO_COPILOT
-            )
-
-        /*
-         * Primeiro sai da tela atual do SPX.
-         */
-        performGlobalAction(
-            GLOBAL_ACTION_BACK
-        )
-
-        handler.postDelayed(
-            {
-
-                val intent =
-                    Intent(
-                        applicationContext,
-                        MainActivity::class.java
-                    ).apply {
-
-                        flags =
-                            Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP
-
-                        putExtra(
-                            "OPEN_ROUTE_MANAGEMENT",
-                            true
-                        )
-                    }
-
-                try {
-
-                    /*
-                     * PendingIntent costuma ser mais confiável
-                     * para trazer Activity à frente a partir
-                     * de AccessibilityService.
-                     */
-                    val pending =
-                        PendingIntent
-                            .getActivity(
-                                applicationContext,
-                                1001,
-                                intent,
-                                PendingIntent.FLAG_UPDATE_CURRENT or
-                                    PendingIntent.FLAG_IMMUTABLE
-                            )
-
-                    pending.send()
-
-                    SpxSessionState
-                        .updateState(
-                            SpxState.ROUTE_READY
-                        )
-
-                    Log.d(
-                        TAG,
-                        "RETORNO_COPILOT=OK"
+            for (
+                index in
+                0 until node.childCount
+            ) {
+                if (
+                    walk(
+                        node.getChild(index)
                     )
-
-                } catch (e: Exception) {
-
-                    Log.e(
-                        TAG,
-                        "PENDING_INTENT_FALHOU",
-                        e
-                    )
-
-                    try {
-
-                        startActivity(
-                            intent
-                        )
-
-                        SpxSessionState
-                            .updateState(
-                                SpxState.ROUTE_READY
-                            )
-
-                        Log.d(
-                            TAG,
-                            "RETORNO_COPILOT=FALLBACK_OK"
-                        )
-
-                    } catch (
-                        erro:
-                        Exception
-                    ) {
-
-                        Log.e(
-                            TAG,
-                            "RETORNO_COPILOT=ERRO",
-                            erro
-                        )
-                    }
+                ) {
+                    return true
                 }
-            },
-            550L
-        )
+            }
+
+            return false
+        }
+
+        walk(root)
     }
 
-    // ======================================================
-    // HELPERS
-    // ======================================================
-
-    private fun pareceTelaLogin(
-        tela: String
+    private fun looksLikeLogin(
+        lower: String
     ): Boolean {
-
-        val fortes =
+        val signals =
             listOf(
-                "esqueci minha senha",
-                "fazer login",
-                "iniciar sessão",
-                "codigo de verificação",
-                "código de verificação"
-            )
-
-        if (
-            fortes.any {
-                tela.contains(it)
-            }
-        ) {
-            return true
-        }
-
-        val sinais =
-            listOf(
-                "login",
                 "senha",
+                "login",
+                "entrar",
                 "email",
-                "e-mail",
-                "entrar"
+                "e-mail"
             )
 
-        return sinais.count {
-            tela.contains(it)
+        return signals.count {
+            lower.contains(it)
         } >= 2
     }
 
-    private fun pareceTelaAutenticada(
-        tela: String
-    ): Boolean {
-
-        return listOf(
-            "entrega",
-            "entregas",
-            "rota",
-            "pacote",
-            "em rota",
-            "escanear",
-            "ocorrência",
-            "entregue"
-        )
-            .any {
-                tela.contains(it)
-            }
-    }
-
-    private fun alterarEstado(
-        estado: SpxState,
-        mensagem: String
-    ) {
-
-        SpxSessionState
-            .updateState(
-                estado
-            )
-
-        SpxSessionState
-            .updateMessage(
-                mensagem
-            )
-
-        if (
-            ultimoEstado !=
-            estado
-        ) {
-
-            ultimoEstado =
-                estado
-
-            Log.d(
-                TAG,
-                "STATUS=$estado"
-            )
-        }
-    }
-
-    private fun coletarTextos(
-        node: AccessibilityNodeInfo?,
-        resultado: MutableList<String>
-    ) {
-
-        if (node == null) {
-            return
-        }
-
-        if (!node.isPassword) {
-
-            node.text
-                ?.toString()
-                ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
-                ?.let {
-                    resultado.add(
-                        it
-                    )
-                }
-
-            node.contentDescription
-                ?.toString()
-                ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
-                ?.let {
-                    resultado.add(
-                        it
-                    )
-                }
-        }
-
-        for (
-            i in 0 until
-                node.childCount
-        ) {
-
-            coletarTextos(
-                node.getChild(i),
-                resultado
-            )
-        }
-    }
-
-    private fun percorrerNodes(
-        node: AccessibilityNodeInfo?,
-        bloco: (
-            AccessibilityNodeInfo
-        ) -> Unit
-    ) {
-
-        if (node == null) {
-            return
-        }
-
-        bloco(
-            node
-        )
-
-        for (
-            i in 0 until
-                node.childCount
-        ) {
-
-            percorrerNodes(
-                node.getChild(i),
-                bloco
-            )
-        }
-    }
-
-    private fun extrairDataAT(
+    private fun parseDateFromAt(
         at: String
     ): String? {
-
         val match =
             Regex(
                 """^AT(\d{4})(\d{2})(\d{2})"""
             )
-                .find(
-                    at.uppercase()
-                )
+                .find(at)
                 ?: return null
 
-        val ano =
+        val year =
             match.groupValues[1]
                 .toIntOrNull()
                 ?: return null
 
-        val mes =
+        val month =
             match.groupValues[2]
                 .toIntOrNull()
                 ?: return null
 
-        val dia =
+        val day =
             match.groupValues[3]
                 .toIntOrNull()
                 ?: return null
 
-        try {
+        return try {
+            GregorianCalendar().apply {
+                isLenient =
+                    false
 
-            GregorianCalendar()
-                .apply {
+                set(
+                    Calendar.YEAR,
+                    year
+                )
 
-                    isLenient =
-                        false
+                set(
+                    Calendar.MONTH,
+                    month - 1
+                )
 
-                    set(
-                        Calendar.YEAR,
-                        ano
-                    )
+                set(
+                    Calendar.DAY_OF_MONTH,
+                    day
+                )
 
-                    set(
-                        Calendar.MONTH,
-                        mes - 1
-                    )
+                time
+            }
 
-                    set(
-                        Calendar.DAY_OF_MONTH,
-                        dia
-                    )
-
-                    time
-                }
-
-        } catch (_: Exception) {
-
-            return null
+            "%02d/%02d/%04d"
+                .format(
+                    day,
+                    month,
+                    year
+                )
+        } catch (
+            _: Exception
+        ) {
+            null
         }
-
-        return String.format(
-            "%02d/%02d/%04d",
-            dia,
-            mes,
-            ano
-        )
-    }
-
-    private fun resetInternal() {
-
-        importCompleted =
-            false
-
-        loginAvisado =
-            false
-
-        ultimoEstado =
-            null
-
-        ultimoAt =
-            null
-
-        ultimoTotalLogado =
-            null
-
-        ultimaQuantidade =
-            0
-
-        ultimoFingerprint =
-            ""
-
-        mesmaViewport =
-            0
-
-        ultimoNavigationTime =
-            0L
-
-        ultimoGestureTime =
-            0L
-
-        ultimoNovoPacoteTime =
-            SystemClock.elapsedRealtime()
-
-        Log.d(
-            TAG,
-            "IMPORT=RESET"
-        )
     }
 
     override fun onInterrupt() {
-
         Log.d(
             TAG,
             "SERVICO=INTERROMPIDO"
         )
-    }
-
-    override fun onDestroy() {
-
-        handler.removeCallbacks(
-            scanRunnable
-        )
-
-        super.onDestroy()
     }
 }

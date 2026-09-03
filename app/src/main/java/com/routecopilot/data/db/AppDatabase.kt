@@ -1,21 +1,71 @@
 package com.routecopilot.data.db
 
 import android.content.Context
-import androidx.room.Database
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import com.routecopilot.data.model.PackageEntity
-import com.routecopilot.data.model.RouteEntity
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteOpenHelper
 
-@Database(entities = [RouteEntity::class, PackageEntity::class], version = 1, exportSchema = false)
-abstract class AppDatabase : RoomDatabase() {
-    abstract fun routeDao(): RouteDao
+class AppDatabase private constructor(
+    context: Context
+) : SQLiteOpenHelper(
+    context.applicationContext,
+    "routecopilot.db",
+    null,
+    1
+) {
+    override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE routes (
+                at TEXT PRIMARY KEY,
+                load_date TEXT,
+                expected_total INTEGER,
+                imported_total INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                status TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE packages (
+                br TEXT PRIMARY KEY,
+                at TEXT NOT NULL,
+                address TEXT,
+                recipient TEXT,
+                phone TEXT,
+                latitude REAL,
+                longitude REAL,
+                spx_order INTEGER,
+                copilot_order INTEGER,
+                status TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+
+        db.execSQL(
+            "CREATE INDEX idx_packages_at ON packages(at)"
+        )
+    }
+
+    override fun onUpgrade(
+        db: SQLiteDatabase,
+        oldVersion: Int,
+        newVersion: Int
+    ) {
+        // Versão inicial.
+    }
 
     companion object {
-        @Volatile private var instance: AppDatabase? = null
-        fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "routecopilot.db")
-                .build().also { instance = it }
+        @Volatile
+        private var instance: AppDatabase? = null
+
+        fun get(context: Context): AppDatabase {
+            return instance ?: synchronized(this) {
+                instance ?: AppDatabase(context).also {
+                    instance = it
+                }
+            }
         }
     }
 }
