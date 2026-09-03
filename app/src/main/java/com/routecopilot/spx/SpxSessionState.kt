@@ -1,206 +1,31 @@
 package com.routecopilot.spx
 
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class SpxState {
-    UNKNOWN,
-    OPENING_SPX,
-    CHECKING_SESSION,
-    LOGIN_REQUIRED,
-    AUTHENTICATED,
-    FINDING_ROUTE,
-    ROUTE_DETECTED,
-    READING_ROUTE,
-    SCANNING_PACKAGES,
-    WAITING_CONTENT,
-    IMPORT_COMPLETE,
-    RETURNING_TO_COPILOT,
-    ROUTE_READY
-}
-
-data class SpxPackage(
-    val code: String,
-    val address: String? = null
-)
+enum class SpxState { UNKNOWN, OPENING_SPX, LOGIN_REQUIRED, FINDING_ROUTE, ROUTE_DETECTED, SCANNING_PACKAGES, IMPORT_COMPLETE, RETURNING_TO_COPILOT, ROUTE_READY }
+enum class SpxAutomationMode { NONE, IMPORT_ROUTE, OUT_OF_ROUTE }
+enum class OccurrencePhase { IDLE, SEARCHING_ORDER, OPENING_ORDER, OPENING_OCCURRENCE, SELECTING_REASON, REASON_SELECTED, OPENING_EVIDENCE, WAITING_PHOTO, INVALID_PHOTO, CONFIRMING, DONE, ERROR }
 
 object SpxSessionState {
+    private val _state = MutableStateFlow(SpxState.UNKNOWN); val state = _state.asStateFlow()
+    private val _mode = MutableStateFlow(SpxAutomationMode.NONE); val mode = _mode.asStateFlow()
+    private val _message = MutableStateFlow("Aguardando SPX"); val message = _message.asStateFlow()
+    private val _at = MutableStateFlow<String?>(null); val at = _at.asStateFlow()
+    private val _date = MutableStateFlow<String?>(null); val date = _date.asStateFlow()
+    private val _expected = MutableStateFlow<Int?>(null); val expected = _expected.asStateFlow()
+    private val _brs = MutableStateFlow<Set<String>>(emptySet()); val brs = _brs.asStateFlow()
+    private val _targetBr = MutableStateFlow<String?>(null); val targetBr = _targetBr.asStateFlow()
+    private val _occurrence = MutableStateFlow(OccurrencePhase.IDLE); val occurrence = _occurrence.asStateFlow()
 
-    private val _state =
-        MutableStateFlow(SpxState.UNKNOWN)
-
-    val state: StateFlow<SpxState> =
-        _state.asStateFlow()
-
-    private val _statusMessage =
-        MutableStateFlow("Aguardando SPX")
-
-    val statusMessage: StateFlow<String> =
-        _statusMessage.asStateFlow()
-
-    private val _atCode =
-        MutableStateFlow<String?>(null)
-
-    val atCode: StateFlow<String?> =
-        _atCode.asStateFlow()
-
-    private val _dataCarregamento =
-        MutableStateFlow<String?>(null)
-
-    val dataCarregamento: StateFlow<String?> =
-        _dataCarregamento.asStateFlow()
-
-    private val _totalEsperado =
-        MutableStateFlow<Int?>(null)
-
-    val totalEsperado: StateFlow<Int?> =
-        _totalEsperado.asStateFlow()
-
-    private val _packages =
-        MutableStateFlow<Map<String, SpxPackage>>(
-            linkedMapOf()
-        )
-
-    val packages: StateFlow<Map<String, SpxPackage>> =
-        _packages.asStateFlow()
-
-    private val _packageCount =
-        MutableStateFlow(0)
-
-    val packageCount: StateFlow<Int> =
-        _packageCount.asStateFlow()
-
-    fun updateState(
-        state: SpxState
-    ) {
-        _state.value = state
-    }
-
-    fun updateMessage(
-        message: String
-    ) {
-        _statusMessage.value = message
-    }
-
-    fun updateAtCode(
-        at: String?
-    ) {
-        if (!at.isNullOrBlank()) {
-            _atCode.value =
-                at.trim().uppercase()
-        }
-    }
-
-    fun updateDataCarregamento(
-        data: String?
-    ) {
-        if (!data.isNullOrBlank()) {
-            _dataCarregamento.value = data
-        }
-    }
-
-    fun updateTotalEsperado(
-        total: Int?
-    ) {
-        if (
-            total == null ||
-            total <= 0 ||
-            total > 1000
-        ) {
-            return
-        }
-
-        val atual =
-            _totalEsperado.value
-
-        if (
-            atual == null ||
-            total > atual
-        ) {
-            _totalEsperado.value =
-                total
-        }
-    }
-
-    fun addOrUpdatePackages(
-        encontrados: Map<String, String?>
-    ): Int {
-
-        val atual =
-            LinkedHashMap(
-                _packages.value
-            )
-
-        var novos = 0
-
-        encontrados.forEach {
-                (codigoOriginal, endereco) ->
-
-            val codigo =
-                codigoOriginal
-                    .trim()
-                    .uppercase()
-
-            if (codigo.isBlank()) {
-                return@forEach
-            }
-
-            val existente =
-                atual[codigo]
-
-            if (existente == null) {
-
-                atual[codigo] =
-                    SpxPackage(
-                        code = codigo,
-                        address = endereco
-                    )
-
-                novos++
-
-            } else if (
-                existente.address.isNullOrBlank() &&
-                !endereco.isNullOrBlank()
-            ) {
-
-                atual[codigo] =
-                    existente.copy(
-                        address = endereco
-                    )
-            }
-        }
-
-        _packages.value =
-            atual
-
-        _packageCount.value =
-            atual.size
-
-        return novos
-    }
-
-    fun resetRoute() {
-
-        _state.value =
-            SpxState.UNKNOWN
-
-        _statusMessage.value =
-            "Preparando importação..."
-
-        _atCode.value =
-            null
-
-        _dataCarregamento.value =
-            null
-
-        _totalEsperado.value =
-            null
-
-        _packages.value =
-            linkedMapOf()
-
-        _packageCount.value =
-            0
-    }
+    fun startImport() { _mode.value = SpxAutomationMode.IMPORT_ROUTE; _state.value = SpxState.OPENING_SPX; _message.value = "Abrindo SPX..."; _at.value = null; _date.value = null; _expected.value = null; _brs.value = emptySet() }
+    fun setState(s: SpxState, m: String) { _state.value = s; _message.value = m }
+    fun setAt(v: String) { _at.value = v.uppercase() }
+    fun setDate(v: String?) { _date.value = v }
+    fun setExpected(v: Int?) { if (v != null && v > 0) _expected.value = v }
+    fun addBrs(values: Collection<String>): Int { val before = _brs.value.size; _brs.value = LinkedHashSet(_brs.value).apply { addAll(values.map { it.uppercase() }) }; return _brs.value.size - before }
+    fun finishImport() { _mode.value = SpxAutomationMode.NONE; _state.value = SpxState.ROUTE_READY; _message.value = "Rota pronta." }
+    fun startOutOfRoute(br: String? = null) { _mode.value = SpxAutomationMode.OUT_OF_ROUTE; _targetBr.value = br?.uppercase(); _occurrence.value = if (br == null) OccurrencePhase.OPENING_ORDER else OccurrencePhase.SEARCHING_ORDER }
+    fun setOccurrence(p: OccurrencePhase) { _occurrence.value = p }
+    fun finishOutOfRoute() { _occurrence.value = OccurrencePhase.DONE; _mode.value = SpxAutomationMode.NONE; _targetBr.value = null }
 }
