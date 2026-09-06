@@ -1,1053 +1,424 @@
 package com.routecopilot.spx
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.Intent
-import android.graphics.Rect
+import android.graphics.Color
+import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.Toast
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
 import com.routecopilot.MainActivity
-import java.util.Calendar
-import java.util.GregorianCalendar
 
 class SpxAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "RouteCopilotACC"
         private const val SPX_PACKAGE = "com.shopee.spx.driver.brazil"
-
-        private const val SCAN_DELAY_MS = 450L
-        private const val NAVIGATION_DELAY_MS = 1400L
-
-        private const val MAX_STAGNANT_PASSES = 7
-        private const val MAX_SCROLL_FAILURES = 3
+        private const val SCAN_DELAY_MS = 650L
+        private const val NAVIGATION_DELAY_MS = 1200L
+        private const val DOWNLOAD_WAIT_MS = 2500L
+        private const val MIN_TIME_WITHOUT_NEW_MS = 15000L
+        private const val STAGNANT_LIMIT = 18
     }
 
     private val handler = Handler(Looper.getMainLooper())
-
-    private var importCompleted = false
-    private var loginAvisado = false
-
-    private var ultimoEstadoLogado: SpxState? = null
-    private var ultimoAtLogado: String? = null
-
-    private var ultimaQuantidade = 0
+    private var importFinished = false
+    private var downloadClicked = false
+    private var deliveriesOpened = false
+    private var inRouteOpened = false
+    private var lastNavigationAt = 0L
+    private var lastGestureAt = 0L
+    private var lastNewPackageAt = SystemClock.elapsedRealtime()
     private var stagnantPasses = 0
-    private var scrollFailures = 0
-    private var ultimoNavigationTime = 0L
+    private var lastPackageCount = 0
+    private var overlayView: View? = null
+    private var overlayMessage: TextView? = null
 
-    private val scanRunnable = Runnable {
-        executarScan()
-    }
+    private val scanRunnable = Runnable { scanCurrentScreen() }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-
         Log.d(TAG, "SERVICO=ATIVO")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-
         if (event == null) return
+        val packageName = event.packageName?.toString() ?: return
+        if (packageName != SPX_PACKAGE) return
 
-        val packageName =
-            event.packageName?.toString() ?: return
-
-        if (packageName != SPX_PACKAGE) {
-            return
-        }
-
-        if (
-            importCompleted &&
-            SpxSessionState.state.value == SpxState.UNKNOWN
-        ) {
-            resetInternalImport()
-        }
-
-        if (importCompleted) {
-            return
-        }
-
-        SpxSessionState.updatePackageName(packageName)
-
-        scheduleScan(120L)
-    }
-
-    private fun scheduleScan(delay: Long = SCAN_DELAY_MS) {
+        if (SpxSessionState.state.value == SpxState.STARTING_IMPORT && importFinished) resetInternal()
+        if (importFinished) return
 
         handler.removeCallbacks(scanRunnable)
-
-        handler.postDelayed(
-            scanRunnable,
-            delay
-        )
+        handler.postDelayed(scanRunnable, 160L)
     }
 
-    private fun executarScan() {
-
-        if (importCompleted) return
-
+    private fun scanCurrentScreen() {
+        if (importFinished) return
         val root = rootInActiveWindow ?: run {
-            scheduleScan()
+            update(SpxState.CHECKING_SESSION, "Aguardando o SPX carregar...")
+            schedule()
             return
         }
 
-        val textos = mutableListOf<String>()
+        val texts = mutableListOf<String>()
+        SpxParser.collectTexts(root, texts)
+        if (texts.isEmpty()) {
+            update(SpxState.CHECKING_SESSION, "Aguardando conteúdo do SPX...")
+            schedule()
+            return
+        }
 
-        coletarTextos(
-            root,
-            textos
-        )
+        val screen = SpxParser.normalizeScreen(texts)
 
-        if (textos.isEmpty()) {
+        if (SpxParser.isLoginScreen(screen)) {
+            hideOverlay()
+            update(SpxState.LOGIN_REQUIRED, "Faça o login normalmente no SPX.")
+            Log.d(TAG, "STATUS=LOGIN_REQUIRED")
+            schedule(900L)
+            return
+        }
 
-            alterarEstado(
-                SpxState.WAITING_CONTENT,
-                "Aguardando o SPX carregar..."
+        if (SpxParser.isConsentScreen(screen)) {
+            hideOverlay()
+            update(SpxState.CONSENT_REQUIRED, "Confirme o aceite no SPX para continuar.")
+            Log.d(TAG, "STATUS=CONSENT_REQUIRED")
+            schedule(900L)
+            return
+        }
+
+        if (SpxParser.isFaceCheckScreen(screen)) {
+            hideOverlay()
+            update(SpxState.FACE_CHECK_REQUIRED, "Conclua o reconhecimento facial no SPX.")
+            Log.d(TAG, "STATUS=FACE_CHECK_REQUIRED")
+            schedule(900L)
+            return
+        }
+
+        showOverlay()
+
+        if (!downloadClicked) {
+            update(SpxState.FINDING_DOWNLOAD_BUTTON, "Localizando a seta de download da rota...")
+            val downloadButton = SpxParser.findClickableByKeywords(
+                root,
+                listOf("download", "baixar", "carregar rota", "sincronizar rota", "atualizar rota", "offline", "⬇", "↓")
             )
 
-            scheduleScan()
+            if (downloadButton != null && canNavigate()) {
+                update(SpxState.DOWNLOAD_BUTTON_FOUND, "Rota localizada. Iniciando download...")
+                val clicked = runCatching {
+                    downloadButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }.getOrDefault(false)
+
+                if (clicked) {
+                    downloadClicked = true
+                    lastNavigationAt = SystemClock.elapsedRealtime()
+                    update(SpxState.DOWNLOADING_ROUTE, "Baixando a árvore da rota...")
+                    Log.d(TAG, "DOWNLOAD=CLICKED")
+                    schedule(DOWNLOAD_WAIT_MS)
+                    return
+                }
+            }
+
+            Log.d(TAG, "DOWNLOAD=NOT_FOUND")
+            schedule(900L)
             return
         }
 
-        val tela =
-            textos
-                .joinToString(" ")
-                .lowercase()
+        if (!deliveriesOpened) {
+            update(SpxState.OPENING_DELIVERIES, "Abrindo Entrega...")
+            val delivery = SpxParser.findClickableExactText(root, "Entrega")
+                ?: SpxParser.findClickableExactText(root, "Entregas")
 
-        // ====================================================
-        // LOGIN
-        // ====================================================
-
-        if (pareceTelaLogin(tela)) {
-
-            alterarEstado(
-                SpxState.LOGIN_REQUIRED,
-                "Autentique-se normalmente no SPX."
-            )
-
-            if (!loginAvisado) {
-
-                loginAvisado = true
-
-                Toast.makeText(
-                    applicationContext,
-                    "Autentique-se no SPX. O RouteCopilot continuará automaticamente.",
-                    Toast.LENGTH_LONG
-                ).show()
+            if (delivery != null && canNavigate()) {
+                val clicked = runCatching {
+                    delivery.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }.getOrDefault(false)
+                if (clicked) {
+                    deliveriesOpened = true
+                    lastNavigationAt = SystemClock.elapsedRealtime()
+                    Log.d(TAG, "NAV=ENTREGA")
+                    schedule(1200L)
+                    return
+                }
             }
 
-            scheduleScan(700L)
-            return
-        }
-
-        loginAvisado = false
-
-        // ====================================================
-        // SESSÃO AUTENTICADA
-        // ====================================================
-
-        if (pareceTelaAutenticada(tela)) {
-
-            if (
-                SpxSessionState.state.value ==
-                SpxState.LOGIN_REQUIRED
-            ) {
-
-                alterarEstado(
-                    SpxState.AUTHENTICATED,
-                    "Autenticação concluída."
-                )
+            if (screen.contains("em rota")) deliveriesOpened = true
+            else {
+                schedule(900L)
+                return
             }
         }
 
-        // ====================================================
-        // TOTAL DE PEDIDOS
-        // ====================================================
+        if (!inRouteOpened) {
+            update(SpxState.OPENING_IN_ROUTE, "Abrindo pedidos Em Rota...")
+            val inRoute = SpxParser.findClickableExactText(root, "Em Rota")
+                ?: SpxParser.findClickableByKeywords(root, listOf("em rota"))
 
-        val total =
-            encontrarTotalPedidos(textos)
+            if (inRoute != null && canNavigate()) {
+                val clicked = runCatching {
+                    inRoute.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }.getOrDefault(false)
+                if (clicked) {
+                    inRouteOpened = true
+                    lastNavigationAt = SystemClock.elapsedRealtime()
+                    Log.d(TAG, "NAV=EM_ROTA")
+                    schedule(1400L)
+                    return
+                }
+            }
 
-        if (total != null) {
-            SpxSessionState.updateTotalEsperado(total)
+            if (screen.contains("em rota")) inRouteOpened = true
+            else {
+                schedule(900L)
+                return
+            }
         }
 
-        // ====================================================
-        // AT
-        // ====================================================
+        update(SpxState.READING_ROUTE, "Importando pedidos da rota...")
 
-        val at =
-            encontrarCodigoAT(textos)
-
-        if (at != null) {
-
+        SpxParser.findAt(texts)?.let { at ->
             SpxSessionState.updateAtCode(at)
-
-            /*
-             * Só preenchemos a data quando a parte inicial
-             * da AT formar uma data de calendário válida.
-             *
-             * Isso ainda deve ser validado com mais ATs reais.
-             */
-            val data =
-                extrairDataCandidataDaAT(at)
-
-            SpxSessionState.updateDataCarregamento(data)
-
-            if (ultimoAtLogado != at) {
-
-                ultimoAtLogado = at
-
-                Log.d(
-                    TAG,
-                    "ROTA_AT=DETECTADA"
-                )
-            }
+            SpxSessionState.updateDataCarregamento(SpxParser.dateFromAt(at))
         }
 
-        // ====================================================
-        // BRs VISÍVEIS
-        // ====================================================
+        SpxParser.findExpectedTotal(texts)?.let(SpxSessionState::updateTotalEsperado)
 
-        val brs =
-            encontrarCodigosBR(textos)
+        val newPackages = SpxSessionState.addPackageCodes(SpxParser.findBrCodes(texts))
+        val count = SpxSessionState.packageCount.value
+        val expected = SpxSessionState.totalEsperado.value
 
-        val novos =
-            SpxSessionState.addPackageCodes(brs)
-
-        val quantidadeAtual =
-            SpxSessionState.packageCount.value
-
-        val totalEsperado =
-            SpxSessionState.totalEsperado.value
-
-        if (novos > 0) {
-
+        if (newPackages > 0) {
             stagnantPasses = 0
-            scrollFailures = 0
-
-            if (quantidadeAtual != ultimaQuantidade) {
-
-                ultimaQuantidade = quantidadeAtual
-
-                /*
-                 * Não registramos os códigos BR no log.
-                 * Apenas a quantidade.
-                 */
-                Log.d(
-                    TAG,
-                    "PACOTES_TOTAL=$quantidadeAtual"
-                )
+            lastNewPackageAt = SystemClock.elapsedRealtime()
+            if (count != lastPackageCount) {
+                lastPackageCount = count
+                Log.d(TAG, "PACOTES_TOTAL=$count")
             }
-
-        } else if (quantidadeAtual > 0) {
-
+        } else if (count > 0) {
             stagnantPasses++
         }
 
-        // ====================================================
-        // ATINGIU O TOTAL INFORMADO PELO SPX
-        // ====================================================
+        update(
+            SpxState.VALIDATING_ROUTE,
+            if (expected != null) "Validando pedidos: $count de $expected" else "Validando pedidos: $count encontrados"
+        )
 
-        if (
-            totalEsperado != null &&
-            totalEsperado > 0 &&
-            quantidadeAtual >= totalEsperado
-        ) {
-
-            concluirImportacao()
+        if (expected != null && expected > 0 && count >= expected) {
+            finishImport()
             return
         }
 
-        // ====================================================
-        // PERCORRER LISTA DE PEDIDOS
-        // ====================================================
+        if (count > 0) {
+            if (tryNodeScroll(root)) {
+                Log.d(TAG, "SCROLL=NODE")
+                schedule(950L)
+                return
+            }
+            if (tryGestureScroll()) {
+                Log.d(TAG, "SCROLL=GESTURE")
+                schedule(1100L)
+                return
+            }
 
-        if (quantidadeAtual > 0) {
-
-            alterarEstado(
-                SpxState.SCANNING_PACKAGES,
-                criarMensagemImportacao(
-                    quantidadeAtual,
-                    totalEsperado
-                )
-            )
-
-            val scrollable =
-                encontrarMelhorScrollable(root)
-
-            if (scrollable != null) {
-
-                val rolou =
-                    scrollable.performAction(
-                        AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                    )
-
-                if (rolou) {
-
-                    scrollFailures = 0
-
-                    if (
-                        stagnantPasses >=
-                        MAX_STAGNANT_PASSES
-                    ) {
-
-                        concluirImportacao()
-                        return
-                    }
-
-                    scheduleScan(SCAN_DELAY_MS)
+            if (expected == null) {
+                val stalledFor = SystemClock.elapsedRealtime() - lastNewPackageAt
+                if (stalledFor >= MIN_TIME_WITHOUT_NEW_MS && stagnantPasses >= STAGNANT_LIMIT) {
+                    finishImport()
                     return
-
-                } else {
-
-                    scrollFailures++
                 }
-
-            } else {
-
-                scrollFailures++
             }
+        }
 
-            if (
-                scrollFailures >=
-                MAX_SCROLL_FAILURES
-            ) {
+        schedule(1000L)
+    }
 
-                concluirImportacao()
-                return
-            }
-
-            scheduleScan()
+    private fun finishImport() {
+        val count = SpxSessionState.packageCount.value
+        if (count <= 0) {
+            SpxSessionState.fail("Não foi possível importar os pedidos.")
             return
         }
 
-        // ====================================================
-        // ENCONTROU AT MAS AINDA NÃO ENCONTROU BR
-        // ====================================================
+        importFinished = true
+        handler.removeCallbacks(scanRunnable)
+        update(SpxState.CALCULATING_ROUTE, "Preparando a rota no Copilot...")
 
-        if (at != null) {
-
-            alterarEstado(
-                SpxState.ROUTE_DETECTED,
-                "Rota localizada. Abrindo pedidos..."
-            )
-
-            tentarAbrirAT(
-                root,
-                at
-            )
-
-            scheduleScan(650L)
-            return
-        }
-
-        // ====================================================
-        // AUTENTICADO, PROCURAR ÁREA DE ENTREGAS
-        // ====================================================
-
-        if (pareceTelaAutenticada(tela)) {
-
-            alterarEstado(
-                SpxState.FINDING_ROUTE,
-                "Localizando sua rota no SPX..."
-            )
-
-            tentarAbrirEntregas(root)
-
-            scheduleScan(700L)
-            return
-        }
-
-        alterarEstado(
-            SpxState.CHECKING_SESSION,
-            "Verificando sessão do SPX..."
-        )
-
-        scheduleScan(700L)
+        handler.postDelayed({
+            update(SpxState.IMPORT_COMPLETE, "Rota importada com sucesso.")
+            hideOverlay()
+            returnToCopilot()
+        }, 800L)
     }
 
-    private fun criarMensagemImportacao(
-        quantidade: Int,
-        total: Int?
-    ): String {
-
-        return if (
-            total != null &&
-            total > 0
-        ) {
-            "Importando pedidos: $quantidade de $total"
-        } else {
-            "Importando pedidos: $quantidade encontrados"
+    private fun returnToCopilot() {
+        update(SpxState.RETURNING_TO_COPILOT, "Voltando ao RouteCopilot...")
+        val intent = Intent(applicationContext, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra("OPEN_ROUTE_MANAGEMENT", true)
         }
-    }
 
-    private fun alterarEstado(
-        estado: SpxState,
-        mensagem: String
-    ) {
-
-        SpxSessionState.updateState(estado)
-        SpxSessionState.updateMessage(mensagem)
-
-        if (ultimoEstadoLogado != estado) {
-
-            ultimoEstadoLogado = estado
-
-            Log.d(
-                TAG,
-                "STATUS=$estado"
-            )
-        }
-    }
-
-    private fun pareceTelaLogin(
-        tela: String
-    ): Boolean {
-
-        val sinaisFortes =
-            listOf(
-                "esqueci minha senha",
-                "fazer login",
-                "iniciar sessão",
-                "código de verificação",
-                "codigo de verificacao",
-                "código de confirmação",
-                "codigo de confirmacao"
-            )
-
-        if (
-            sinaisFortes.any {
-                tela.contains(it)
+        runCatching { startActivity(intent) }
+            .onSuccess {
+                update(SpxState.ROUTE_READY, "Rota pronta.")
+                Log.d(TAG, "RETURN=COPILOT")
             }
-        ) {
-            return true
-        }
-
-        val sinais =
-            listOf(
-                "login",
-                "senha",
-                "e-mail",
-                "email",
-                "telefone",
-                "entrar"
-            )
-
-        return sinais.count {
-            tela.contains(it)
-        } >= 2
-    }
-
-    private fun pareceTelaAutenticada(
-        tela: String
-    ): Boolean {
-
-        val sinais =
-            listOf(
-                "entrega",
-                "entregas",
-                "rota",
-                "rotas",
-                "pacote",
-                "pacotes",
-                "em rota",
-                "escanear",
-                "ocorrência",
-                "entregue"
-            )
-
-        return sinais.any {
-            tela.contains(it)
-        }
-    }
-
-    private fun encontrarCodigoAT(
-        textos: List<String>
-    ): String? {
-
-        val regex =
-            Regex(
-                """\bAT[A-Z0-9]{8,}\b""",
-                RegexOption.IGNORE_CASE
-            )
-
-        textos.forEach { texto ->
-
-            val normalizado =
-                texto
-                    .replace(" ", "")
-                    .uppercase()
-
-            val resultado =
-                regex.find(normalizado)
-
-            if (resultado != null) {
-                return resultado.value.uppercase()
+            .onFailure {
+                Log.e(TAG, "RETURN=FAILED", it)
+                SpxSessionState.fail("Rota importada, mas não foi possível retornar ao Copilot.")
             }
-        }
-
-        return null
     }
 
-    private fun encontrarCodigosBR(
-        textos: List<String>
-    ): Set<String> {
-
-        val encontrados =
-            linkedSetOf<String>()
-
-        val regex =
-            Regex(
-                """\bBR[A-Z0-9]{8,}\b""",
-                RegexOption.IGNORE_CASE
-            )
-
-        textos.forEach { texto ->
-
-            val normalizado =
-                texto
-                    .replace(" ", "")
-                    .uppercase()
-
-            regex
-                .findAll(normalizado)
-                .forEach { resultado ->
-
-                    encontrados.add(
-                        resultado.value.uppercase()
-                    )
-                }
-        }
-
-        return encontrados
+    private fun update(state: SpxState, message: String) {
+        SpxSessionState.updateState(state, message)
+        overlayMessage?.text = message
     }
 
-    private fun encontrarTotalPedidos(
-        textos: List<String>
-    ): Int? {
+    private fun canNavigate(): Boolean =
+        SystemClock.elapsedRealtime() - lastNavigationAt >= NAVIGATION_DELAY_MS
 
-        var maiorTotal: Int? = null
-
-        val regexFracao =
-            Regex(
-                """\b(\d{1,4})\s*/\s*(\d{1,4})\b"""
-            )
-
-        textos.forEach { texto ->
-
-            regexFracao
-                .findAll(texto)
-                .forEach { resultado ->
-
-                    val total =
-                        resultado
-                            .groupValues
-                            .getOrNull(2)
-                            ?.toIntOrNull()
-
-                    if (
-                        total != null &&
-                        total > 0 &&
-                        (maiorTotal == null || total > maiorTotal!!)
-                    ) {
-                        maiorTotal = total
-                    }
-                }
+    private fun tryNodeScroll(root: AccessibilityNodeInfo): Boolean {
+        val candidates = mutableListOf<AccessibilityNodeInfo>()
+        collectScrollableNodes(root, candidates)
+        for (node in candidates) {
+            val moved = runCatching {
+                node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            }.getOrDefault(false)
+            if (moved) return true
         }
-
-        val regexTexto =
-            Regex(
-                """\b(\d{1,4})\s+(?:pedidos?|pacotes?)\b""",
-                RegexOption.IGNORE_CASE
-            )
-
-        textos.forEach { texto ->
-
-            regexTexto
-                .findAll(texto)
-                .forEach { resultado ->
-
-                    val total =
-                        resultado
-                            .groupValues
-                            .getOrNull(1)
-                            ?.toIntOrNull()
-
-                    if (
-                        total != null &&
-                        total > 0 &&
-                        (maiorTotal == null || total > maiorTotal!!)
-                    ) {
-                        maiorTotal = total
-                    }
-                }
-        }
-
-        return maiorTotal
-    }
-
-    private fun extrairDataCandidataDaAT(
-        at: String
-    ): String? {
-
-        val regex =
-            Regex(
-                """^AT(\d{4})(\d{2})(\d{2})"""
-            )
-
-        val resultado =
-            regex.find(at.uppercase())
-                ?: return null
-
-        val ano =
-            resultado.groupValues[1].toIntOrNull()
-                ?: return null
-
-        val mes =
-            resultado.groupValues[2].toIntOrNull()
-                ?: return null
-
-        val dia =
-            resultado.groupValues[3].toIntOrNull()
-                ?: return null
-
-        if (ano !in 2020..2100) {
-            return null
-        }
-
-        try {
-
-            GregorianCalendar().apply {
-
-                isLenient = false
-
-                set(
-                    Calendar.YEAR,
-                    ano
-                )
-
-                set(
-                    Calendar.MONTH,
-                    mes - 1
-                )
-
-                set(
-                    Calendar.DAY_OF_MONTH,
-                    dia
-                )
-
-                time
-            }
-
-        } catch (_: Exception) {
-
-            return null
-        }
-
-        return String.format(
-            "%02d/%02d/%04d",
-            dia,
-            mes,
-            ano
-        )
-    }
-
-    private fun encontrarMelhorScrollable(
-        root: AccessibilityNodeInfo
-    ): AccessibilityNodeInfo? {
-
-        val candidatos =
-            mutableListOf<AccessibilityNodeInfo>()
-
-        coletarScrollables(
-            root,
-            candidatos
-        )
-
-        if (candidatos.isEmpty()) {
-            return null
-        }
-
-        return candidatos.maxByOrNull { node ->
-
-            val rect = Rect()
-
-            node.getBoundsInScreen(rect)
-
-            rect.height()
-        }
-    }
-
-    private fun coletarScrollables(
-        node: AccessibilityNodeInfo?,
-        resultado: MutableList<AccessibilityNodeInfo>
-    ) {
-
-        if (node == null) return
-
-        if (node.isScrollable) {
-
-            val possuiScrollForward =
-                node.actionList.any {
-                    it.id ==
-                        AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                }
-
-            if (possuiScrollForward) {
-                resultado.add(node)
-            }
-        }
-
-        for (i in 0 until node.childCount) {
-
-            coletarScrollables(
-                node.getChild(i),
-                resultado
-            )
-        }
-    }
-
-    private fun tentarAbrirEntregas(
-        root: AccessibilityNodeInfo
-    ) {
-
-        if (!podeNavegarAgora()) return
-
-        val palavras =
-            listOf(
-                "entrega",
-                "entregas"
-            )
-
-        for (palavra in palavras) {
-
-            val node =
-                encontrarNodePorTexto(
-                    root,
-                    palavra,
-                    false
-                )
-
-            if (
-                node != null &&
-                clicarNodeOuPai(node)
-            ) {
-
-                registrarNavegacao()
-
-                Log.d(
-                    TAG,
-                    "NAV=ENTREGAS"
-                )
-
-                return
-            }
-        }
-    }
-
-    private fun tentarAbrirAT(
-        root: AccessibilityNodeInfo,
-        at: String
-    ) {
-
-        if (!podeNavegarAgora()) return
-
-        val node =
-            encontrarNodePorTexto(
-                root,
-                at,
-                true
-            )
-
-        if (
-            node != null &&
-            clicarNodeOuPai(node)
-        ) {
-
-            registrarNavegacao()
-
-            Log.d(
-                TAG,
-                "NAV=ROTA"
-            )
-        }
-    }
-
-    private fun podeNavegarAgora(): Boolean {
-
-        val agora =
-            SystemClock.elapsedRealtime()
-
-        return agora - ultimoNavigationTime >=
-            NAVIGATION_DELAY_MS
-    }
-
-    private fun registrarNavegacao() {
-
-        ultimoNavigationTime =
-            SystemClock.elapsedRealtime()
-    }
-
-    private fun encontrarNodePorTexto(
-        node: AccessibilityNodeInfo?,
-        textoProcurado: String,
-        exato: Boolean
-    ): AccessibilityNodeInfo? {
-
-        if (node == null) return null
-
-        if (!node.isPassword) {
-
-            val texto =
-                node.text
-                    ?.toString()
-                    ?.trim()
-
-            val descricao =
-                node.contentDescription
-                    ?.toString()
-                    ?.trim()
-
-            if (
-                textoCombina(
-                    texto,
-                    textoProcurado,
-                    exato
-                ) ||
-                textoCombina(
-                    descricao,
-                    textoProcurado,
-                    exato
-                )
-            ) {
-                return node
-            }
-        }
-
-        for (i in 0 until node.childCount) {
-
-            val encontrado =
-                encontrarNodePorTexto(
-                    node.getChild(i),
-                    textoProcurado,
-                    exato
-                )
-
-            if (encontrado != null) {
-                return encontrado
-            }
-        }
-
-        return null
-    }
-
-    private fun textoCombina(
-        valor: String?,
-        procurado: String,
-        exato: Boolean
-    ): Boolean {
-
-        if (valor.isNullOrBlank()) {
-            return false
-        }
-
-        return if (exato) {
-
-            valor.equals(
-                procurado,
-                ignoreCase = true
-            )
-
-        } else {
-
-            valor.contains(
-                procurado,
-                ignoreCase = true
-            )
-        }
-    }
-
-    private fun clicarNodeOuPai(
-        nodeOriginal: AccessibilityNodeInfo
-    ): Boolean {
-
-        var node: AccessibilityNodeInfo? =
-            nodeOriginal
-
-        var profundidade = 0
-
-        while (
-            node != null &&
-            profundidade < 6
-        ) {
-
-            if (node.isClickable) {
-
-                return node.performAction(
-                    AccessibilityNodeInfo.ACTION_CLICK
-                )
-            }
-
-            node = node.parent
-            profundidade++
-        }
-
         return false
     }
 
-    private fun coletarTextos(
-        node: AccessibilityNodeInfo?,
-        resultado: MutableList<String>
-    ) {
-
+    private fun collectScrollableNodes(node: AccessibilityNodeInfo?, output: MutableList<AccessibilityNodeInfo>) {
         if (node == null) return
-
-        /*
-         * Campos marcados como senha não entram
-         * no processamento do RouteCopilot.
-         */
-        if (!node.isPassword) {
-
-            val texto =
-                node.text
-                    ?.toString()
-                    ?.trim()
-
-            if (!texto.isNullOrBlank()) {
-                resultado.add(texto)
-            }
-
-            val descricao =
-                node.contentDescription
-                    ?.toString()
-                    ?.trim()
-
-            if (
-                !descricao.isNullOrBlank() &&
-                descricao != texto
-            ) {
-                resultado.add(descricao)
-            }
-        }
-
-        for (i in 0 until node.childCount) {
-
-            coletarTextos(
-                node.getChild(i),
-                resultado
-            )
-        }
+        if (node.isScrollable) output.add(node)
+        for (i in 0 until node.childCount) collectScrollableNodes(node.getChild(i), output)
     }
 
-    private fun concluirImportacao() {
+    private fun tryGestureScroll(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastGestureAt < 800L) return false
+        lastGestureAt = now
 
-        if (importCompleted) return
+        val metrics = resources.displayMetrics
+        val x = metrics.widthPixels * 0.50f
+        val startY = metrics.heightPixels * 0.76f
+        val endY = metrics.heightPixels * 0.30f
+        val path = Path().apply {
+            moveTo(x, startY)
+            lineTo(x, endY)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 430L))
+            .build()
 
-        val quantidade =
-            SpxSessionState.packageCount.value
-
-        if (quantidade <= 0) return
-
-        importCompleted = true
-
-        SpxSessionState.updateState(
-            SpxState.IMPORT_COMPLETE
-        )
-
-        SpxSessionState.updateMessage(
-            "Importação concluída."
-        )
-
-        Log.d(
-            TAG,
-            "IMPORT_COMPLETE | TOTAL=$quantidade"
-        )
-
-        Toast.makeText(
-            applicationContext,
-            "Rota importada: $quantidade pedidos.",
-            Toast.LENGTH_SHORT
-        ).show()
-
-        voltarParaCopilot()
+        return runCatching { dispatchGesture(gesture, null, handler) }.getOrDefault(false)
     }
 
-    private fun voltarParaCopilot() {
+    private fun showOverlay() {
+        if (overlayView != null) {
+            overlayMessage?.text = SpxSessionState.statusMessage.value
+            return
+        }
 
-        SpxSessionState.updateState(
-            SpxState.RETURNING_TO_COPILOT
-        )
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(64, 64, 64, 64)
+            setBackgroundColor(Color.rgb(247, 249, 252))
+        }
 
-        val intent =
-            Intent(
-                applicationContext,
-                MainActivity::class.java
-            ).apply {
+        val brand = TextView(this).apply {
+            text = "RouteCopilot"
+            textSize = 28f
+            setTextColor(Color.rgb(18, 103, 227))
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        }
+        val title = TextView(this).apply {
+            text = "Sincronizando rota"
+            textSize = 22f
+            setTextColor(Color.rgb(15, 23, 42))
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(0, 36, 0, 12)
+        }
+        val progress = ProgressBar(this).apply { isIndeterminate = true }
+        val message = TextView(this).apply {
+            text = SpxSessionState.statusMessage.value
+            textSize = 16f
+            setTextColor(Color.rgb(71, 85, 105))
+            gravity = Gravity.CENTER
+            setPadding(0, 28, 0, 0)
+        }
+        overlayMessage = message
 
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP
-                )
+        container.addView(brand)
+        container.addView(title)
+        container.addView(progress)
+        container.addView(message)
 
-                putExtra(
-                    "OPEN_ROUTE_MANAGEMENT",
-                    true
-                )
-            }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.CENTER }
 
-        try {
-
-            startActivity(intent)
-
-            SpxSessionState.updateState(
-                SpxState.ROUTE_READY
-            )
-
-        } catch (e: Exception) {
-
-            Log.e(
-                TAG,
-                "ERRO_RETORNO_COPILOT",
-                e
-            )
+        runCatching {
+            windowManager.addView(container, params)
+            overlayView = container
         }
     }
 
-    private fun resetInternalImport() {
+    private fun hideOverlay() {
+        val view = overlayView ?: return
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        runCatching { windowManager.removeView(view) }
+        overlayView = null
+        overlayMessage = null
+    }
 
-        importCompleted = false
-        loginAvisado = false
+    private fun schedule(delay: Long = SCAN_DELAY_MS) {
+        handler.removeCallbacks(scanRunnable)
+        handler.postDelayed(scanRunnable, delay)
+    }
 
-        ultimoEstadoLogado = null
-        ultimoAtLogado = null
-
-        ultimaQuantidade = 0
+    private fun resetInternal() {
+        importFinished = false
+        downloadClicked = false
+        deliveriesOpened = false
+        inRouteOpened = false
+        lastNavigationAt = 0L
+        lastGestureAt = 0L
+        lastNewPackageAt = SystemClock.elapsedRealtime()
         stagnantPasses = 0
-        scrollFailures = 0
-
-        ultimoNavigationTime = 0L
+        lastPackageCount = 0
+        hideOverlay()
+        Log.d(TAG, "IMPORT=RESET")
     }
 
     override fun onInterrupt() {
-
-        Log.d(
-            TAG,
-            "SERVICO=INTERROMPIDO"
-        )
+        Log.d(TAG, "SERVICO=INTERROMPIDO")
     }
 
     override fun onDestroy() {
-
-        handler.removeCallbacks(
-            scanRunnable
-        )
-
+        handler.removeCallbacks(scanRunnable)
+        hideOverlay()
         super.onDestroy()
     }
 }
