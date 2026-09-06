@@ -155,6 +155,7 @@ object SpxParser {
     fun findExpectedTotal(
         texts: List<String>
     ): Int? {
+<<<<<<< Updated upstream
         findInRouteTotal(texts)?.let {
             return it
         }
@@ -195,6 +196,23 @@ object SpxParser {
         }
 
         return best
+=======
+        /*
+         * ETAPA 1 / V6
+         *
+         * O total da rota passa a ser aceito SOMENTE quando
+         * estiver explicitamente ligado à aba "Em Rota".
+         *
+         * Isso evita o erro que já ocorreu no aparelho:
+         * um contador local "3" foi interpretado como total
+         * da AT e a importação terminou em 3 pedidos.
+         *
+         * Se o SPX não expuser "Em Rota (N)", retornamos null.
+         * Nesse caso o AccessibilityService continua percorrendo
+         * a lista e usa o detector de fim real da rolagem.
+         */
+        return findInRouteTotal(texts)
+>>>>>>> Stashed changes
     }
 
     fun dateFromAt(
