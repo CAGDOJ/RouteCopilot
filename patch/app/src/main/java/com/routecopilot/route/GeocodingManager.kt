@@ -17,7 +17,11 @@ object GeocodingManager {
         RouteRepository.initialize(context)
 
         executor.execute {
-            val geocoder = Geocoder(context, Locale("pt", "BR"))
+            val geocoder = Geocoder(
+                context,
+                Locale.forLanguageTag("pt-BR")
+            )
+
             RouteRepository.stops.value.forEach { stop ->
                 if (
                     stop.latitude == null &&
@@ -26,6 +30,7 @@ object GeocodingManager {
                 ) {
                     val query = buildString {
                         append(stop.address)
+
                         if (
                             !stop.address.contains("PA", ignoreCase = true) &&
                             !stop.address.contains("Belém", ignoreCase = true) &&
@@ -38,8 +43,8 @@ object GeocodingManager {
 
                     val result = runCatching {
                         @Suppress("DEPRECATION")
-                        geocoder.getFromLocationName(query, 1)
-                    }.getOrNull()?.firstOrNull()
+                        geocoder.getFromLocationName(query, 1)?.firstOrNull()
+                    }.getOrNull()
 
                     if (result != null) {
                         RouteRepository.updateStop(
@@ -51,6 +56,7 @@ object GeocodingManager {
                     }
                 }
             }
+
             onFinished?.invoke()
         }
     }

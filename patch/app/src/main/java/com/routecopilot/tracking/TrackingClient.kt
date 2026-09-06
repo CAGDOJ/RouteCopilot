@@ -21,23 +21,23 @@ object TrackingClient {
         courierLat: Double,
         courierLon: Double,
         etaMinutes: Int,
-        onResult: ((Boolean) -> Unit)? = null
+        remainingStops: Int = 0
     ) {
         val base = TrackingConfig.BASE_URL.trim().trimEnd('/')
-        if (base.isBlank()) {
-            onResult?.invoke(false)
-            return
-        }
+        if (base.isBlank()) return
 
         executor.execute {
-            val ok = runCatching {
+            runCatching {
                 val url = URL("$base/api/track/${stop.trackingToken}")
                 val connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 8000
                     readTimeout = 8000
                     doOutput = true
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty(
+                        "Content-Type",
+                        "application/json; charset=utf-8"
+                    )
                 }
 
                 val body = JSONObject().apply {
@@ -46,15 +46,17 @@ object TrackingClient {
                     put("destination_lat", stop.latitude)
                     put("destination_lon", stop.longitude)
                     put("eta_minutes", etaMinutes)
+                    put("remaining_stops", remainingStops.coerceAtLeast(0))
                     put("status", stop.status.name)
                 }.toString()
 
-                connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                val code = connection.responseCode
+                connection.outputStream.use {
+                    it.write(body.toByteArray(Charsets.UTF_8))
+                }
+
+                connection.responseCode
                 connection.disconnect()
-                code in 200..299
-            }.getOrDefault(false)
-            onResult?.invoke(ok)
+            }
         }
     }
 }
