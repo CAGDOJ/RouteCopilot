@@ -13,7 +13,6 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.routecopilot.MainActivity
 import com.routecopilot.route.RouteRepository
 
-
 class SpxAccessibilityService : AccessibilityService() {
 
     companion object {

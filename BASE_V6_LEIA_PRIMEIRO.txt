@@ -1,0 +1,40 @@
+ROUTECOPILOT — BASE V6 FIEL AO LAYOUT APROVADO
+06/09/2026
+
+ESTA É A BASE DE TRABALHO.
+Não reconstruir MainActivity do zero nas próximas correções.
+Não trocar paleta/layout para corrigir SPX.
+
+REFERÊNCIA VISUAL OFICIAL:
+docs/RouteCopilot_layout_referencia.png
+
+TELAS-ALVO:
+1. Início
+2. Sincronização com SPX
+3. Rota ativa
+4. Rastreamento do cliente (será implementado em etapa posterior)
+
+ESTADO DESTA BASE:
+- Projeto Android completo (Gradle wrapper incluso)
+- Layout V5 preservado
+- Serviço de Acessibilidade SPX incluso
+- Parser SPX incluso
+- Estados de login/aceite/reconhecimento facial/download/Em Rota/importação inclusos
+- Retorno ao RouteCopilot incluso
+- Ícones vetoriais inclusos
+
+REGRA PARA AS PRÓXIMAS ETAPAS:
+Só alterar os arquivos necessários para a funcionalidade da etapa.
+O layout de referência fica congelado.
+
+PRIMEIRO TESTE:
+1. Abra PowerShell na raiz do projeto.
+2. .\CONFIGURAR_SDK.ps1
+3. .\BUILD_E_INSTALAR.ps1
+4. Ative RouteCopilot em Configurações > Acessibilidade (se necessário).
+5. Inicie a rota.
+6. Rode o log:
+   & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" logcat -c
+   & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" logcat -s RouteCopilotACC:D
+
+NÃO AVANÇAR PARA WAZE/WHATSAPP/ROTEAMENTO ANTES DE ESTABILIZAR A SINCRONIZAÇÃO SPX.

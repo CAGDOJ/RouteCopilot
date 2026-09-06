@@ -1,34 +1,16 @@
-ROUTECOPILOT V6 - ETAPA 1
+ROUTECOPILOT V6 COMPLETO — ETAPA 1
 06/09/2026
 
-BASE:
-- Mantido integralmente o layout e o fluxo da V5 enviada pelo usuário.
-- docs/RouteCopilot_layout_referencia.png continua sendo a referência visual oficial.
-- MainActivity.kt NÃO foi redesenhado.
-- Fluxo SPX da V5 foi preservado: login/aceite/facial/download/Entrega/Em Rota/importação/retorno.
+BASE OFICIAL:
+- Projeto Android COMPLETO com Gradle Wrapper, settings.gradle.kts, build.gradle.kts, app, tema, recursos e ícones.
+- Layout de referência preservado em docs/RouteCopilot_layout_referencia.png.
+- Não reconstruir nem simplificar MainActivity para corrigir SPX.
 
-CORREÇÃO DESTA ETAPA:
-- SpxParser.findExpectedTotal() agora aceita somente o contador explícito "Em Rota (N)".
-- Foi removido o fallback genérico x/y nesta etapa porque ele podia capturar um contador irrelevante.
-- Sem total explícito, o serviço continua rolando a lista e determina o fim pelo fluxo já existente.
+CORREÇÃO ETAPA 1:
+- SpxParser.findExpectedTotal() aceita somente o contador explícito da aba "Em Rota (N)".
+- Não usa mais fallback genérico x/y como total da rota.
+- Objetivo: impedir falso TOTAL_ESPERADO=3 e encerramento prematuro.
 
-NÃO FOI ALTERADO NESTA ETAPA:
-- Layout.
-- Paleta.
-- Telas.
-- Retorno ao Copilot.
-- Clique de download.
-- Navegação Entrega / Em Rota.
-- Waze.
-- WhatsApp.
-- Otimizador de rota.
-
-PRÓXIMAS ETAPAS, UMA POR VEZ:
-2. Validar importação de TODOS os BRs e fortalecer detecção de fim da lista.
-3. Persistência local/offline da rota.
-4. Modelo completo dos pedidos/endereço/ordem SPX.
-5. Otimizador de rota e comparação SPX x Copilot.
-6. Waze.
-7. WhatsApp.
-8. Fluxo Ler Pedido -> SPX -> Entregue/Ocorrência -> retorno.
-9. Rastreamento privado do cliente.
+REGRA DE EVOLUÇÃO:
+- Fazer uma etapa por vez.
+- Antes da próxima etapa, validar esta no aparelho e salvar um checkpoint no Git.

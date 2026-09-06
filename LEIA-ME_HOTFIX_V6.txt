@@ -1,0 +1,73 @@
+ROUTECOPILOT - HOTFIX REABERTURA V6
+====================================
+
+PROBLEMA CORRIGIDO
+------------------
+Depois que uma rota funcionava na primeira execução, fechar o RouteCopilot e abrir
+novamente podia fazer o app abrir o SPX de novo, mas sem importar e sem retornar.
+
+CAUSA
+-----
+A sessão da rota era mantida apenas em memória (StateFlow).
+Quando o processo Android era encerrado:
+- AT sumia da memória;
+- lista de BRs sumia da memória;
+- ROUTE_READY sumia;
+- o app podia interpretar a reabertura como nova sincronização.
+
+Além disso, o AccessibilityService podia reagir a eventos do SPX mesmo sem uma
+nova importação explicitamente iniciada.
+
+O HOTFIX
+--------
+1. Salva a última rota concluída em SharedPreferences.
+2. Restaura AT, data, total e BRs quando o processo abrir novamente.
+3. Restaura o estado ROUTE_READY antes da tela abrir.
+4. Cancela qualquer "importação antiga" deixada por um processo encerrado.
+5. O AccessibilityService só controla o SPX quando beginImport() foi chamado.
+6. Abrir o SPX manualmente não dispara a sincronização do Copilot.
+
+ARQUIVOS
+--------
+app/src/main/java/com/routecopilot/RouteCopilotApp.kt
+app/src/main/java/com/routecopilot/spx/SpxSessionState.kt
+app/src/main/AndroidManifest.xml
+
+O arquivo SpxAccessibilityService.kt é corrigido automaticamente pelo script
+APLICAR_HOTFIX_V6.ps1 para preservar a versão V5 que já está funcionando no seu aparelho.
+
+COMO APLICAR
+------------
+Abra PowerShell na raiz:
+C:\Users\stel-adm\Documents\GitHub\RouteCopilot
+
+Copie APLICAR_HOTFIX_V6.ps1 para a raiz do projeto e execute:
+
+powershell -ExecutionPolicy Bypass -File .\APLICAR_HOTFIX_V6.ps1
+
+Depois:
+
+.\gradlew.bat clean
+.\gradlew.bat assembleDebug
+
+Se BUILD SUCCESSFUL:
+
+$adb="$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+& $adb install -r ".\app\build\outputs\apk\debug\app-debug.apk"
+
+IMPORTANTE PARA TESTAR
+----------------------
+Como a versão anterior ainda não gravava a rota em disco, faça UMA sincronização
+nova depois de instalar este hotfix.
+
+Depois que ela retornar ao RouteCopilot:
+1. Feche o RouteCopilot.
+2. Retire dos recentes.
+3. Abra novamente.
+4. Ele deve restaurar a rota ativa e NÃO abrir o SPX sozinho.
+
+LOG
+---
+$adb="$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+& $adb logcat -c
+& $adb logcat -s RouteCopilotACC:D

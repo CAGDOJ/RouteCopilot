@@ -1,39 +1,44 @@
 $ErrorActionPreference = "Stop"
 
+Write-Host "" 
+Write-Host "=== RouteCopilot - Build e Instalação ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "=== RouteCopilot - Build ===" -ForegroundColor Cyan
-Write-Host ""
 
-& .\gradlew.bat assembleDebug
-if ($LASTEXITCODE -ne 0) {
-    throw "O build falhou. Corrija o erro antes de instalar."
-}
-
-$adb = Get-Command adb -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
-
-if (-not $adb) {
-    $sdkAdb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
-    if (Test-Path $sdkAdb) {
-        $adb = $sdkAdb
+if (-not (Test-Path ".\local.properties")) {
+    $sdk = Join-Path $env:LOCALAPPDATA "Android\Sdk"
+    if (Test-Path $sdk) {
+        $sdkEscaped = $sdk.Replace("\\", "\\\\")
+        "sdk.dir=$sdkEscaped" | Set-Content -Encoding ASCII ".\local.properties"
+        Write-Host "local.properties criado automaticamente." -ForegroundColor Green
     }
 }
 
+& .\gradlew.bat clean
+if ($LASTEXITCODE -ne 0) { throw "Gradle clean falhou." }
+
+& .\gradlew.bat assembleDebug
+if ($LASTEXITCODE -ne 0) { throw "O build falhou." }
+
+$adb = Get-Command adb -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
 if (-not $adb) {
-    throw "ADB não encontrado. Instale Android SDK Platform-Tools ou adicione platform-tools ao PATH."
+    $sdkAdb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
+    if (Test-Path $sdkAdb) { $adb = $sdkAdb }
 }
+if (-not $adb) { throw "ADB não encontrado." }
 
 $apk = ".\app\build\outputs\apk\debug\app-debug.apk"
+if (-not (Test-Path $apk)) { throw "APK não encontrado: $apk" }
 
 Write-Host ""
 Write-Host "=== Dispositivos ===" -ForegroundColor Cyan
 & $adb devices
 
 Write-Host ""
-Write-Host "=== Instalando APK ===" -ForegroundColor Cyan
+Write-Host "=== Instalando ===" -ForegroundColor Cyan
 & $adb install -r $apk
-
 if ($LASTEXITCODE -ne 0) {
-    throw "Falha ao instalar o APK."
+    Write-Host "A atualização falhou. Se aparecer assinatura incompatível, desinstale a versão anterior manualmente e execute novamente." -ForegroundColor Yellow
+    exit $LASTEXITCODE
 }
 
 Write-Host ""
