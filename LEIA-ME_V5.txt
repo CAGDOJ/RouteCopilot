@@ -1,0 +1,82 @@
+ROUTECOPILOT V5
+06/09/2026
+
+O QUE FOI CORRIGIDO
+
+1. SINCRONIZAÇÃO NÃO BLOQUEIA MAIS A TELA
+- Removido overlay de tela inteira.
+- Agora existe apenas um banner pequeno no topo.
+- O banner NÃO captura toques.
+- Voltar, Home e gestos do Android continuam disponíveis.
+
+2. NÃO DEVE MAIS IR PARA ENCERRADOS/FINALIZADOS
+- A presença do texto "Em Rota" não é mais considerada suficiente.
+- O RouteCopilot precisa clicar de verdade na aba "Em Rota".
+- Se a tela já mostra Em Rota / Ocorrência / Encerrado, ele NÃO clica novamente em "Entrega".
+- Ele procura a aba cujo texto começa com "Em Rota", inclusive "Em Rota (63)".
+- Só depois desse clique começa a importar BRs.
+
+3. TOTAL DE PEDIDOS
+- O parser prioriza o contador "Em Rota (63)".
+- Não usa o contador de Encerrado como total da rota.
+- Isso evita misturar finalizados antigos com os pedidos atuais.
+
+4. DOWNLOAD PRIMEIRO
+- Continua obrigatório localizar e clicar no botão/seta de download antes de importar a rota.
+- A procura é mais conservadora para evitar clicar em elementos errados.
+- Se não localizar em 15 segundos, cancela e volta ao RouteCopilot com erro.
+- A sincronização completa também possui limite de 60 segundos.
+
+5. INTERFACE CLEAN
+- Logo RouteCopilot.
+- Marca Route azul + Copilot laranja.
+- Ícones vetoriais reais para:
+  iniciar rota
+  mensagens
+  localização
+  SPX
+  navegação
+  WhatsApp
+  sincronização
+  Em rota
+  Ocorrências
+  Encerrados
+- Fundo claro, cards brancos e visual próximo do mockup aprovado.
+- Telas têm rolagem, evitando conteúdo cortado.
+
+COMO APLICAR
+
+Extraia o ZIP SOBRE:
+C:\Users\stel-adm\Documents\GitHub\RouteCopilot
+
+Confirme a substituição.
+
+Depois:
+
+.\gradlew.bat clean
+.\gradlew.bat assembleDebug
+
+Se BUILD SUCCESSFUL:
+
+adb uninstall com.routecopilot
+adb install ".\app\build\outputs\apk\debug\app-debug.apk"
+
+Se quiser preservar o app instalado e a assinatura for compatível:
+adb install -r ".\app\build\outputs\apk\debug\app-debug.apk"
+
+Depois ative novamente:
+Configurações > Acessibilidade > RouteCopilot
+
+LOG:
+adb logcat -c
+adb logcat -s RouteCopilotACC:D
+
+NO NOVO LOG:
+DOWNLOAD=CLICKED
+NAV=ENTREGA            (somente se necessário)
+NAV=EM_ROTA
+PACOTES_TOTAL=...
+RETURN=COPILOT
+
+Se a seta não for encontrada, o log agora também mostra candidatos clicáveis seguros,
+sem imprimir códigos BR/AT completos.

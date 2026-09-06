@@ -1,0 +1,90 @@
+ROUTECOPILOT - PACOTE DE ATUALIZAÇÃO
+Data: 06/09/2026
+
+Extraia este ZIP SOBRE a raiz atual do projeto RouteCopilot e confirme a substituição dos arquivos.
+
+Inclui:
+- MainActivity.kt com o novo layout clean/claro.
+- SpxSessionState.kt.
+- SpxParser.kt.
+- SpxAccessibilityService.kt.
+- AndroidManifest.xml.
+- accessibility_service_config.xml.
+- Mockup visual em docs/.
+
+FLUXO:
+1. INICIAR ROTA.
+2. Abre SPX.
+3. Se pedir login: o usuário faz o login normalmente.
+4. Se pedir aceite/termos: o usuário confirma na tela oficial do SPX.
+5. Se pedir reconhecimento facial: o usuário conclui no SPX.
+6. Depois o RouteCopilot cobre o SPX com a tela clean de sincronização.
+7. Localiza primeiro o botão/seta de download da rota.
+8. Clica no download.
+9. Depois abre Entrega / Em Rota.
+10. Só então importa AT, total e BRs.
+11. Valida a quantidade e retorna automaticamente ao RouteCopilot.
+
+IMPORTANTE:
+A seta de download é localizada pelos textos, contentDescription e viewId expostos pelo SPX.
+Como esse identificador pode variar entre versões do SPX, o primeiro teste deve ser acompanhado com:
+adb logcat -s RouteCopilotACC:D
+
+COMPILAR:
+.\gradlew.bat assembleDebug
+
+INSTALAR:
+adb install -r .\app\build\outputs\apk\debug\app-debug.apk
+
+Se adb não estiver no PATH:
+& "C:\Users\stel-adm\AppData\Local\Android\Sdk\platform-tools\adb.exe" install -r ".\app\build\outputs\apk\debug\app-debug.apk"
+
+
+CORREÇÃO V2:
+- Corrigido erro Kotlin "Unresolved reference 'weight'" no MainActivity.kt.
+- AppScaffold agora expõe ColumnScope corretamente.
+- Incluído BUILD_E_INSTALAR.ps1 para compilar e localizar o ADB automaticamente.
+
+USO RÁPIDO:
+PowerShell:
+  .\BUILD_E_INSTALAR.ps1
+
+Ou manual:
+  .\gradlew.bat assembleDebug
+  & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r ".\app\build\outputs\apk\debug\app-debug.apk"
+
+
+CORREÇÃO V3:
+- Corrigidas as duas ocorrências que ainda causavam:
+  Unresolved reference 'weight'
+  nas telas Sincronização e Rota Ativa.
+- Os espaçadores de fim de tela agora usam height(24.dp), sem depender de ColumnScope.weight.
+- Os Modifier.weight usados dentro de Row continuam intactos, pois são válidos no RowScope.
+
+APLICAR:
+1. Extraia esta V3 sobre a raiz do projeto e confirme substituir.
+2. Rode:
+   .\gradlew.bat clean
+   .\gradlew.bat assembleDebug
+3. Se BUILD SUCCESSFUL:
+   & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r ".\app\build\outputs\apk\debug\app-debug.apk"
+
+
+CORREÇÃO V4:
+- MainActivity.kt refeito SEM NENHUMA chamada Modifier.weight().
+- Isso elimina completamente o erro Kotlin 'Unresolved reference weight'.
+- Layout reorganizado para continuar clean e responsivo sem depender de weight().
+- Incluído VERIFICAR_V4.ps1.
+
+IMPORTANTE:
+Após extrair esta V4 sobre a raiz do projeto, execute:
+  Select-String -Path ".\app\src\main\java\com\routecopilot\MainActivity.kt" -Pattern "\.weight\("
+
+O comando NÃO deve retornar nenhuma linha.
+
+Depois:
+  .\gradlew.bat clean
+  .\gradlew.bat assembleDebug
+
+Ou:
+  .\VERIFICAR_V4.ps1
