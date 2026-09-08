@@ -120,8 +120,8 @@ items.forEach(item=>{
 });
 if(points.length===1){map.setView(points[0],16);} else {map.fitBounds(points,{padding:[22,22]});}
 if(points.length>1){
-  const coords=points.map(p=>`${p[1]},${p[0]}`).join(';');
-  fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`)
+  const coords=points.map(p=>`${'$'}{p[1]},${'$'}{p[0]}`).join(';');
+  fetch(`https://router.project-osrm.org/route/v1/driving/${'$'}{coords}?overview=full&geometries=geojson`)
     .then(r=>r.ok?r.json():Promise.reject())
     .then(data=>{
       const geometry=data?.routes?.[0]?.geometry;

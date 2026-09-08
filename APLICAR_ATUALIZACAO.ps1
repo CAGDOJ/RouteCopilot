@@ -26,7 +26,7 @@ $ProjectPath = (Resolve-Path $ProjectPath).Path
 $PayloadRoot = (Resolve-Path $PayloadRoot).Path
 
 Write-Host ""
-Write-Host "RouteCopilot V4.1 - aplicando atualizacao" -ForegroundColor Cyan
+Write-Host "RouteCopilot V4.2 - aplicando atualizacao" -ForegroundColor Cyan
 Write-Host "Origem : $PayloadRoot"
 Write-Host "Destino: $ProjectPath"
 Write-Host ""

@@ -520,6 +520,8 @@ private fun RouteScreen(
         return
     }
 
+    val context = LocalContext.current
+
     val pending = route.packages.count {
         (statuses[it.spxTn] ?: PackageStatus.PENDING) == PackageStatus.PENDING
     }
@@ -654,7 +656,7 @@ private fun RouteScreen(
                     pkg = pkg,
                     status = statuses[pkg.spxTn] ?: PackageStatus.PENDING,
                     preference = preferences[pkg.spxTn],
-                    onNavigate = { WazeLauncher.navigate(LocalContext.current, pkg.navigationAddress) },
+                    onNavigate = { WazeLauncher.navigate(context, pkg.navigationAddress) },
                     onRetry = { onRetry(pkg.spxTn) }
                 )
             }

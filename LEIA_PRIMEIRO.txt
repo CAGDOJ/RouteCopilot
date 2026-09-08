@@ -1,25 +1,13 @@
-RouteCopilot V4.1 - pacote corrigido
+RouteCopilot V4.2 - correção de compilação
 
-CORRECAO PRINCIPAL
-A V4 anterior podia falhar se APLICAR_ATUALIZACAO.ps1 fosse colocada dentro
-da propria pasta do projeto, pois tentava copiar app\ para ele mesmo.
+Corrige:
+1. MainActivity.kt: LocalContext.current sendo chamado dentro de lambda não @Composable.
+2. RouteMapView.kt: interpolação JavaScript ${...} sendo interpretada pelo Kotlin.
 
-Nesta versao, os arquivos da atualizacao ficam isolados em:
-    payload\
-
-Assim, o script sempre copia de payload\ para o projeto e evita
-origem=destino.
-
-USO
-1. Extraia este ZIP em uma pasta separada, por exemplo:
-   C:\Users\stel-adm\Downloads\RouteCopilot_V4_1
-
-2. Abra PowerShell dentro dessa pasta.
-
-3. Execute:
+Aplicação:
+1. Extraia este ZIP fora da pasta do projeto.
+2. Execute:
    powershell -ExecutionPolicy Bypass -File .\APLICAR_ATUALIZACAO.ps1 -ProjectPath "C:\Users\stel-adm\Documents\GitHub\RouteCopilot"
-
-4. Depois:
-   cd C:\Users\stel-adm\Documents\GitHub\RouteCopilot
+3. No projeto:
    .\gradlew.bat clean
    .\gradlew.bat assembleDebug
