@@ -1,0 +1,13 @@
+PATCH V2 - SpxStatus
+
+Corrige os estados faltantes:
+- UNAVAILABLE
+- CHECKING
+
+Esses estados são usados pelo MainActivity.kt e SpxBridge.kt da sua versão atual.
+
+Extraia este ZIP na raiz do projeto e substitua o arquivo.
+
+Depois:
+.\gradlew.bat clean
+.\gradlew.bat assembleDebug

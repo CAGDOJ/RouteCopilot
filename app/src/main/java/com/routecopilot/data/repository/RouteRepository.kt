@@ -1,61 +1,119 @@
 package com.routecopilot.data.repository
 
-import android.content.Context
-import com.routecopilot.data.db.AppDatabase
-import com.routecopilot.data.db.RouteDao
-import com.routecopilot.data.model.PackageRecord
-import com.routecopilot.data.model.RouteRecord
+import com.routecopilot.data.model.Delivery
+import com.routecopilot.data.model.DeliveryStatus
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
-class RouteRepository private constructor(
-    private val dao: RouteDao
-) {
-    fun saveImportedRoute(
-        at: String,
-        loadDate: String?,
-        expectedTotal: Int?,
-        brs: Collection<String>
+object RouteRepository {
+
+    private val _deliveries =
+        MutableStateFlow<Map<String, Delivery>>(emptyMap())
+
+    val deliveries: StateFlow<Map<String, Delivery>> =
+        _deliveries.asStateFlow()
+
+    fun clear() {
+        _deliveries.value = emptyMap()
+    }
+
+    fun ensureDelivery(
+        trackingCode: String,
+        spxOrder: Int? = null
     ) {
-        dao.upsertRoute(
-            RouteRecord(
-                at = at,
-                loadDate = loadDate,
-                expectedTotal = expectedTotal,
-                importedTotal = brs.size
-            )
+        val code = trackingCode.trim().uppercase()
+        if (code.isBlank()) return
+        if (_deliveries.value.containsKey(code)) return
+
+        val novaLista = _deliveries.value.toMutableMap()
+        novaLista[code] = Delivery(
+            trackingCode = code,
+            spxOrder = spxOrder
+        )
+        _deliveries.value = novaLista
+    }
+
+    fun upsertDelivery(
+        trackingCode: String,
+        customerName: String? = null,
+        phone: String? = null,
+        address: String? = null,
+        neighborhood: String? = null,
+        status: DeliveryStatus? = null,
+        spxOrder: Int? = null
+    ) {
+        val code = trackingCode.trim().uppercase()
+        if (code.isBlank()) return
+
+        val atual =
+            _deliveries.value[code]
+                ?: Delivery(trackingCode = code)
+
+        val atualizado = atual.copy(
+            customerName =
+                customerName?.trim()?.takeIf { it.isNotBlank() }
+                    ?: atual.customerName,
+
+            phone =
+                phone?.trim()?.takeIf { it.isNotBlank() }
+                    ?: atual.phone,
+
+            address =
+                address?.trim()?.takeIf { it.isNotBlank() }
+                    ?: atual.address,
+
+            neighborhood =
+                neighborhood?.trim()?.takeIf { it.isNotBlank() }
+                    ?: atual.neighborhood,
+
+            status = status ?: atual.status,
+
+            spxOrder = spxOrder ?: atual.spxOrder,
+
+            lastUpdatedAt = System.currentTimeMillis()
         )
 
-        dao.upsertPackages(
-            brs.map { br ->
-                PackageRecord(
-                    br = br,
-                    at = at
-                )
-            }
+        val novaLista = _deliveries.value.toMutableMap()
+        novaLista[code] = atualizado
+        _deliveries.value = novaLista
+    }
+
+    fun updateStatus(
+        trackingCode: String,
+        status: DeliveryStatus
+    ) {
+        upsertDelivery(
+            trackingCode = trackingCode,
+            status = status
         )
     }
 
-    fun getRoutes() = dao.getRoutes()
-
-    fun getPackages(at: String) = dao.getPackages(at)
-
-    fun updateStatus(br: String, status: String) {
-        dao.updatePackageStatus(br, status)
+    fun getDelivery(
+        trackingCode: String
+    ): Delivery? {
+        return _deliveries.value[
+            trackingCode.trim().uppercase()
+        ]
     }
 
-    companion object {
-        @Volatile
-        private var instance: RouteRepository? = null
+    fun total(): Int =
+        _deliveries.value.size
 
-        fun get(context: Context): RouteRepository {
-            return instance ?: synchronized(this) {
-                instance ?: RouteRepository(
-                    RouteDao(
-                        AppDatabase.get(context)
-                    )
-                ).also {
-                    instance = it
-                }
-            }
+    fun pendingCount(): Int =
+        _deliveries.value.values.count {
+            it.status == DeliveryStatus.PENDING ||
+                it.status == DeliveryStatus.OUT_FOR_DELIVERY ||
+                it.status == DeliveryStatus.UNKNOWN
         }
-    }
+
+    fun deliveredCount(): Int =
+        _deliveries.value.values.count {
+            it.status == DeliveryStatus.DELIVERED
+        }
+
+    fun occurrenceCount(): Int =
+        _deliveries.value.values.count {
+            it.status == DeliveryStatus.OCCURRENCE
+        }
 }

@@ -1,8 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+
+<accessibility-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+
     android:packageNames="com.shopee.spx.driver.brazil"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked"
+
+    android:accessibilityEventTypes="
+        typeWindowStateChanged|
+        typeWindowContentChanged|
+        typeViewClicked|
+        typeViewSelected|
+        typeViewScrolled"
+
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+
+    android:accessibilityFlags="
+        flagReportViewIds|
+        flagRetrieveInteractiveWindows"
+
     android:canRetrieveWindowContent="true"
-    android:notificationTimeout="100" />
+
+    android:canPerformGestures="true"
+
+    android:notificationTimeout="80" />
