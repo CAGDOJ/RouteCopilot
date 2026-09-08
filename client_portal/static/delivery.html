@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Sua entrega</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--bg:#08111f;--card:#111c2e;--card2:#162338;--txt:#f8fafc;--muted:#94a3b8;--orange:#f97316;--blue:#38bdf8;--green:#22c55e;--warn:#f59e0b}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,sans-serif;overflow:hidden}
+.page{height:100dvh;padding:max(10px,env(safe-area-inset-top)) 12px max(10px,env(safe-area-inset-bottom));display:grid;grid-template-rows:auto auto auto 1fr auto;gap:7px}
+.top{display:flex;justify-content:space-between;align-items:end}.title{font-size:18px;font-weight:850}.br{font-size:11px;color:var(--blue);font-weight:750;max-width:55vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.label{font-size:11px;color:var(--muted);font-weight:700;margin-bottom:5px}.choices{display:grid;grid-template-columns:1fr 1fr;gap:5px}.choice{background:var(--card2);border:1px solid transparent;color:var(--txt);border-radius:10px;padding:8px 5px;font-size:11px;font-weight:750;text-align:center}.choice.active{border-color:var(--orange);background:#2a1c18}.wide{grid-column:1/-1}.extra{display:grid;grid-template-columns:1fr 1fr;gap:5px}.input{width:100%;border:0;outline:0;border-radius:9px;background:var(--card2);color:var(--txt);padding:8px;font-size:11px}.hidden{display:none!important}
+.keyword{display:grid;grid-template-columns:auto auto auto 1fr;gap:5px;align-items:center}.yesno{padding:7px 10px;border-radius:9px;border:0;background:var(--card2);color:var(--txt);font-size:10px;font-weight:800}.yesno.active{background:var(--orange)}
+.mapwrap{min-height:0;border-radius:13px;overflow:hidden;background:var(--card)}#map{height:100%;min-height:135px}.leaflet-control-attribution{font-size:7px}.car,.box{width:30px;height:30px;border-radius:50%;background:var(--orange);display:flex;align-items:center;justify-content:center;font-size:18px;border:2px solid #fff;box-shadow:0 2px 8px #0007}
+.bottom{display:grid;grid-template-columns:1fr;gap:4px}.status{text-align:center;color:var(--muted);font-size:10px;min-height:13px}.confirm{border:0;border-radius:11px;padding:10px;background:var(--orange);color:#fff;font-size:12px;font-weight:900}.confirm.done{background:var(--green)}
+@media(max-height:620px){.page{gap:4px;padding-top:6px;padding-bottom:6px}.choice{padding:6px 4px}.input{padding:6px}.confirm{padding:8px}.title{font-size:16px}.mapwrap #map{min-height:110px}}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="top"><div><div class="title">SUA ENTREGA</div><div id="recipient" class="label"></div></div><div id="br" class="br">BR...</div></div>
+
+  <div>
+    <div class="label">Como prefere receber?</div>
+    <div class="choices" id="choices">
+      <button class="choice" data-value="HANDS">Em mãos</button>
+      <button class="choice" data-value="NEIGHBOR">Vizinho</button>
+      <button class="choice" data-value="PORTER">Portaria</button>
+      <button class="choice" data-value="PORCH_MAILBOX">Varanda/Caixa</button>
+      <button class="choice wide" data-value="NOBODY_AVAILABLE">Ninguém para receber</button>
+    </div>
+  </div>
+
+  <div>
+    <div id="neighbor" class="extra hidden">
+      <input id="neighborName" class="input" placeholder="Nome do vizinho">
+      <input id="neighborPhone" class="input" inputmode="tel" placeholder="Contato">
+    </div>
+    <div class="keyword">
+      <span class="label" style="margin:0">Tem palavra-chave?</span>
+      <button id="kwYes" class="yesno">SIM</button>
+      <button id="kwNo" class="yesno active">NÃO</button>
+      <input id="keyword" class="input hidden" placeholder="Qual?">
+    </div>
+  </div>
+
+  <div class="mapwrap"><div id="map"></div></div>
+
+  <div class="bottom">
+    <div id="status" class="status">Motorista a caminho</div>
+    <button id="confirm" class="confirm">CONFIRMAR</button>
+  </div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const TOKEN=__TOKEN__;
+let preference='HANDS',hasKeyword=false,data=null,driverMarker=null,destMarker=null,line=null;
+const map=L.map('map',{zoomControl:true,attributionControl:true}).setView([-1.455,-48.49],13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+const carIcon=L.divIcon({className:'',html:'<div class="car">🚗</div>',iconSize:[30,30],iconAnchor:[15,15]});
+const boxIcon=L.divIcon({className:'',html:'<div class="box">📦</div>',iconSize:[30,30],iconAnchor:[15,15]});
+function selectPref(v){preference=v;document.querySelectorAll('.choice').forEach(b=>b.classList.toggle('active',b.dataset.value===v));document.getElementById('neighbor').classList.toggle('hidden',v!=='NEIGHBOR')}
+document.querySelectorAll('.choice').forEach(b=>b.onclick=()=>selectPref(b.dataset.value));selectPref('HANDS');
+kwYes.onclick=()=>{hasKeyword=true;kwYes.classList.add('active');kwNo.classList.remove('active');keyword.classList.remove('hidden')};
+kwNo.onclick=()=>{hasKeyword=false;kwNo.classList.add('active');kwYes.classList.remove('active');keyword.classList.add('hidden')};
+async function load(){const r=await fetch('/api/delivery/'+TOKEN);if(!r.ok)return;data=await r.json();br.textContent=data.br;recipient.textContent=data.recipient_name||'';if(data.preference){selectPref(data.preference);neighborName.value=data.neighbor_name||'';neighborPhone.value=data.neighbor_phone||'';hasKeyword=!!data.has_keyword;if(hasKeyword)kwYes.click();else kwNo.click();keyword.value=data.keyword||'';if(data.confirmed_at){confirm.textContent='✓ PEDIDO CONFIRMADO';confirm.classList.add('done')}}updateMap();updateStatus()}
+function updateStatus(){if(!data)return;const labels={A_CAMINHO:'Motorista a caminho',PROXIMO:'Sua entrega é a próxima',PAUSADO:'Motorista em pausa'+(data.pause_reason?' • '+data.pause_reason:''),ENTREGUE:'Pedido entregue',OCORRENCIA:'Entrega com ocorrência'};status.textContent=labels[data.status]||'Motorista a caminho'}
+function updateMap(){if(!data)return;const pts=[];if(data.driver_lat!=null&&data.driver_lon!=null){const p=[data.driver_lat,data.driver_lon];pts.push(p);if(driverMarker)driverMarker.setLatLng(p);else driverMarker=L.marker(p,{icon:carIcon}).addTo(map)}if(data.destination_lat!=null&&data.destination_lon!=null){const p=[data.destination_lat,data.destination_lon];pts.push(p);if(destMarker)destMarker.setLatLng(p);else destMarker=L.marker(p,{icon:boxIcon}).addTo(map)}if(line){map.removeLayer(line);line=null}if(pts.length===2)line=L.polyline(pts,{color:'#f97316',weight:4,dashArray:'8 6'}).addTo(map);if(pts.length===1)map.setView(pts[0],15);if(pts.length===2)map.fitBounds(pts,{padding:[25,25]})}
+confirm.onclick=async()=>{const body={preference,neighbor_name:neighborName.value,neighbor_phone:neighborPhone.value,has_keyword:hasKeyword,keyword:keyword.value};const r=await fetch('/api/delivery/'+TOKEN+'/confirm',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(r.ok){confirm.textContent='✓ PEDIDO CONFIRMADO';confirm.classList.add('done');status.textContent='Preferência registrada'}else{const e=await r.json().catch(()=>({detail:'Não foi possível confirmar'}));status.textContent=e.detail||'Não foi possível confirmar'}};
+load();setInterval(load,8000);
+</script>
+</body>
+</html>
