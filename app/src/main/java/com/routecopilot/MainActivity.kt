@@ -1,9 +1,11 @@
 package com.routecopilot
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
@@ -55,6 +57,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.routecopilot.data.ActivityEntry
 import com.routecopilot.data.ClientPreference
 import com.routecopilot.data.DeliveryPreferenceType
@@ -65,6 +68,8 @@ import com.routecopilot.data.RomaneioPackage
 import com.routecopilot.data.RomaneioRepository
 import com.routecopilot.data.RomaneioRoute
 import com.routecopilot.data.RomaneioSession
+import com.routecopilot.data.RouteHistoryEntry
+import com.routecopilot.data.RouteHistoryStore
 import com.routecopilot.data.RouteLogic
 import com.routecopilot.data.RouteRunState
 import com.routecopilot.data.RouteStop
@@ -75,23 +80,27 @@ import com.routecopilot.scanner.PackageScanner
 import com.routecopilot.spx.SpxBridge
 import com.routecopilot.spx.SpxSessionState
 import com.routecopilot.spx.SpxStatus
+import com.routecopilot.tracking.CourierTrackingService
+import com.routecopilot.tracking.RouteTripTracker
+import com.routecopilot.tracking.TripPoint
 import com.routecopilot.ui.theme.RouteCopilotTheme
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val Background = Color(0xFF08111F)
-private val Surface = Color(0xFF111C2E)
-private val Surface2 = Color(0xFF162338)
+private val Background = Color(0xFFF6F8FC)
+private val Surface = Color(0xFFFFFFFF)
+private val Surface2 = Color(0xFFEEF3F8)
 private val Blue = Color(0xFF2563EB)
-private val Cyan = Color(0xFF38BDF8)
+private val Cyan = Color(0xFF0284C7)
 private val Orange = Color(0xFFF97316)
-private val White = Color(0xFFF8FAFC)
-private val Muted = Color(0xFF94A3B8)
-private val Success = Color(0xFF22C55E)
+private val White = Color(0xFF0F172A)
+private val Muted = Color(0xFF64748B)
+private val Success = Color(0xFF16A34A)
 private val Warning = Color(0xFFF59E0B)
-private val Danger = Color(0xFFEF4444)
+private val Danger = Color(0xFFDC2626)
+private val OnPrimary = Color(0xFFFFFFFF)
 
 class MainActivity : ComponentActivity() {
 
@@ -102,6 +111,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         RomaneioSession.initialize(this)
+        RouteTripTracker.initialize(this)
+        RouteHistoryStore.initialize(this)
         SpxBridge.refreshPresence(this)
         accessibilityEnabled.value = isAccessibilityServiceEnabled(this)
 
