@@ -257,6 +257,8 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
             statuses = statuses,
             runState = runState,
             lastSync = lastSync,
+            tripDistanceMeters = tripDistanceMeters,
+            history = history,
             busy = busy,
             statusText = statusText,
             error = error,
@@ -294,9 +296,40 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
             geocodeProgress = geocodeProgress,
             activities = activities,
             spxStatus = spxStatus,
+            tripActive = tripActive,
+            tripStartedAt = tripStartedAt,
+            tripDistanceMeters = tripDistanceMeters,
+            tripPoints = tripPoints,
+            courierLocation = courierLocation,
             onHome = { screen = AppScreen.HOME },
             onExpandMap = { screen = AppScreen.MAP },
-            onStart = RomaneioSession::startDeliveries,
+            onStart = {
+                val selected = route
+                if (selected == null) {
+                    Toast.makeText(context, "Nenhuma rota carregada.", Toast.LENGTH_SHORT).show()
+                } else if (hasLocationPermission(context)) {
+                    startTrackedRoute(context, selected)
+                    RomaneioSession.startDeliveries()
+                } else {
+                    pendingStartRoute = selected
+                    locationPermissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                }
+            },
+            onFinish = {
+                val selected = route
+                if (selected != null) {
+                    finishTrackedRoute(
+                        context = context,
+                        route = selected,
+                        statuses = statuses
+                    )
+                }
+            },
             onPause = RomaneioSession::pause,
             onResume = RomaneioSession::resume,
             onScan = {
@@ -306,9 +339,12 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
                     onFound = { scannedPackage = it }
                 )
             },
-            onNavigate = { stop ->
+            onNavigate = { screen = AppScreen.MAP },
+            onWaze = { stop ->
                 val pkg = stop.activePackages.firstOrNull()
-                if (pkg != null) WazeLauncher.navigate(context, pkg.navigationAddress)
+                if (pkg != null) {
+                    WazeLauncher.navigate(context, pkg.navigationAddress)
+                }
             },
             onRetry = RomaneioSession::retryDelivery,
             onSpx = {
@@ -321,6 +357,10 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
             route = route,
             stops = activeStops,
             coordinates = coordinates,
+            courierLocation = courierLocation,
+            tripPoints = tripPoints,
+            tripDistanceMeters = tripDistanceMeters,
+            tripStartedAt = tripStartedAt,
             geocodeProgress = geocodeProgress,
             onClose = { screen = AppScreen.ROUTE }
         )
