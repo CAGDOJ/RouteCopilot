@@ -155,11 +155,41 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
     val activities by RomaneioSession.activities.collectAsState()
     val spxStatus by SpxSessionState.status.collectAsState()
 
+    val tripActive by RouteTripTracker.active.collectAsState()
+    val tripStartedAt by RouteTripTracker.startedAt.collectAsState()
+    val tripDistanceMeters by RouteTripTracker.distanceMeters.collectAsState()
+    val tripPoints by RouteTripTracker.points.collectAsState()
+    val courierLocation by RouteTripTracker.currentLocation.collectAsState()
+    val history by RouteHistoryStore.entries.collectAsState()
+
     var screen by remember { mutableStateOf(if (route != null) AppScreen.ROUTE else AppScreen.HOME) }
     var folderUri by remember { mutableStateOf(RomaneioFolderStore.get(context)) }
     var coordinates by remember { mutableStateOf<Map<String, GeoPoint>>(emptyMap()) }
     var geocodeProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var scannedPackage by remember { mutableStateOf<RomaneioPackage?>(null) }
+    var pendingStartRoute by remember { mutableStateOf<RomaneioRoute?>(null) }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        val granted =
+            result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+
+        val routeToStart = pendingStartRoute
+        pendingStartRoute = null
+
+        if (granted && routeToStart != null) {
+            startTrackedRoute(context, routeToStart)
+            RomaneioSession.startDeliveries()
+        } else if (!granted) {
+            Toast.makeText(
+                context,
+                "A localização é necessária para registrar o trajeto e os quilômetros da rota.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     fun sync() {
         val uri = RomaneioFolderStore.get(context)
