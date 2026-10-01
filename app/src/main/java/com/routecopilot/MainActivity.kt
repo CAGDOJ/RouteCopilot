@@ -1130,7 +1130,10 @@ private fun ActionButton(
         onClick = onClick,
         enabled = enabled,
         shape = RoundedCornerShape(16.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = White)
+        colors = ButtonDefaults.buttonColors(
+            containerColor = color,
+            contentColor = if (color == Surface2) White else OnPrimary
+        )
     ) {
         Text(text, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     }
@@ -1147,7 +1150,10 @@ private fun SmallButton(
         modifier = modifier.height(46.dp),
         onClick = onClick,
         shape = RoundedCornerShape(13.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = White),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = color,
+            contentColor = if (color == Surface2) White else OnPrimary
+        ),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp)
     ) {
         Text(text, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
@@ -1172,6 +1178,97 @@ private fun preferenceLabel(pref: ClientPreference): String = when (pref.type) {
 
 private fun formatTime(timestamp: Long): String =
     SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date(timestamp))
+
+private fun formatKm(distanceMeters: Double): String =
+    String.format(Locale("pt", "BR"), "%.1f km", distanceMeters / 1000.0)
+
+private fun formatDurationFrom(startedAt: Long): String {
+    if (startedAt <= 0L) return "00h00"
+
+    val finishedAt = RouteTripTracker.finishedAt.value
+    val end = if (finishedAt > 0L) finishedAt else System.currentTimeMillis()
+    val totalMinutes = ((end - startedAt).coerceAtLeast(0L) / 60_000L)
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+
+    return String.format(Locale.ROOT, "%02dh%02d", hours, minutes)
+}
+
+private fun hasLocationPermission(context: Context): Boolean {
+    val fine = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+
+    val coarse = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+
+    return fine || coarse
+}
+
+private fun startTrackedRoute(
+    context: Context,
+    route: RomaneioRoute
+) {
+    RouteTripTracker.startRoute(
+        context = context,
+        atId = route.atId
+    )
+
+    ContextCompat.startForegroundService(
+        context,
+        Intent(context, CourierTrackingService::class.java)
+    )
+}
+
+private fun finishTrackedRoute(
+    context: Context,
+    route: RomaneioRoute,
+    statuses: Map<String, PackageStatus>
+) {
+    val finishedAt = System.currentTimeMillis()
+    val startedAt = RouteTripTracker.startedAt.value
+    val distanceMeters = RouteTripTracker.distanceMeters.value
+
+    val delivered = route.packages.count {
+        statuses[it.spxTn] == PackageStatus.DELIVERED
+    }
+
+    val occurrences = route.packages.count {
+        val status = statuses[it.spxTn]
+        status == PackageStatus.OCCURRENCE ||
+            status == PackageStatus.POSSIBLE_OCCURRENCE
+    }
+
+    RouteTripTracker.finishRoute(context)
+
+    RouteHistoryStore.record(
+        context = context,
+        entry = RouteHistoryEntry(
+            atId = route.atId,
+            startedAt = startedAt,
+            finishedAt = finishedAt,
+            distanceMeters = distanceMeters,
+            totalPackages = route.packages.size,
+            deliveredPackages = delivered,
+            occurrences = occurrences
+        )
+    )
+
+    context.stopService(
+        Intent(context, CourierTrackingService::class.java)
+    )
+
+    RomaneioSession.finishDeliveries()
+
+    Toast.makeText(
+        context,
+        "Rota encerrada: ${formatKm(distanceMeters)} registrados.",
+        Toast.LENGTH_LONG
+    ).show()
+}
 
 private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
