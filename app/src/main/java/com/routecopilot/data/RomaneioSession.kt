@@ -153,6 +153,13 @@ object RomaneioSession {
         persist()
     }
 
+    fun finishDeliveries() {
+        _runState.value = RouteRunState.IDLE
+        _pauseReason.value = ""
+        addActivity("Rota encerrada")
+        persist()
+    }
+
     fun markDelivered(br: String) {
         updateStatus(br, PackageStatus.DELIVERED)
         addActivity("Pedido $br marcado como entregue")
