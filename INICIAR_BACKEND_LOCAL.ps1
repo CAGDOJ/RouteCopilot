@@ -6,33 +6,36 @@ $venv = Join-Path $backend ".venv"
 $pythonExe = Join-Path $venv "Scripts\python.exe"
 $requirements = Join-Path $backend "requirements.txt"
 
-function Invoke-SystemPython {
-    param(
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$Arguments
-    )
+function Find-WorkingPython {
+    $candidates = @()
 
     $py = Get-Command py.exe -ErrorAction SilentlyContinue
-    if (-not $py) {
-        $py = Get-Command py -ErrorAction SilentlyContinue
-    }
-
     if ($py) {
-        & $py.Source -3 @Arguments
-        return
+        $candidates += @{
+            Command = $py.Source
+            Prefix = @("-3")
+        }
     }
 
     $python = Get-Command python.exe -ErrorAction SilentlyContinue
-    if (-not $python) {
-        $python = Get-Command python -ErrorAction SilentlyContinue
-    }
-
     if ($python) {
-        & $python.Source @Arguments
-        return
+        $candidates += @{
+            Command = $python.Source
+            Prefix = @()
+        }
     }
 
-    throw "Python 3 nao foi encontrado no Windows."
+    foreach ($candidate in $candidates) {
+        try {
+            & $candidate.Command @($candidate.Prefix) --version *> $null
+            if ($LASTEXITCODE -eq 0) {
+                return $candidate
+            }
+        } catch {
+        }
+    }
+
+    return $null
 }
 
 Write-Host ""
@@ -50,8 +53,24 @@ if (-not (Test-Path $requirements)) {
 }
 
 if (-not (Test-Path $pythonExe)) {
+    $systemPython = Find-WorkingPython
+
+    if ($null -eq $systemPython) {
+        Write-Host "Python 3 real nao esta instalado." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "O Windows encontrou apenas o atalho da Microsoft Store, que nao executa Python." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Instale com:" -ForegroundColor Cyan
+        Write-Host "winget install -e --id Python.Python.3.13" -ForegroundColor White
+        Write-Host ""
+        Write-Host "Depois feche e abra o PowerShell e execute novamente:" -ForegroundColor Cyan
+        Write-Host ".\ABRIR_SITES_ROUTE_COPILOT.ps1" -ForegroundColor White
+        exit 2
+    }
+
     Write-Host "[1/3] Criando ambiente Python..." -ForegroundColor Yellow
-    Invoke-SystemPython -Arguments @("-m", "venv", $venv)
+
+    & $systemPython.Command @($systemPython.Prefix) -m venv $venv
 
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pythonExe)) {
         throw "Falha ao criar o ambiente virtual Python."
