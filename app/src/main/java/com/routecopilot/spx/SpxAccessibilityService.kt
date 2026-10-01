@@ -284,17 +284,17 @@ class SpxAccessibilityService :
                 "Nenhuma AT associada no SPX."
             )
 
-            Log.d(
-                TAG,
-                "NO_ACTIVE_ROUTE | EM_ROTA=0 | AT=NONE"
-            )
-
             if (
                 !returnedNoActiveRoute
             ) {
 
                 returnedNoActiveRoute =
                     true
+
+                Log.d(
+                    TAG,
+                    "NO_ACTIVE_ROUTE | EM_ROTA=0 | AT=NONE"
+                )
 
                 Toast.makeText(
                     applicationContext,
