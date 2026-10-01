@@ -396,6 +396,8 @@ private fun HomeScreen(
     statuses: Map<String, PackageStatus>,
     runState: RouteRunState,
     lastSync: Long,
+    tripDistanceMeters: Double,
+    history: List<RouteHistoryEntry>,
     busy: Boolean,
     statusText: String,
     error: String?,
@@ -498,7 +500,36 @@ private fun HomeScreen(
             )
         }
 
+        if (tripDistanceMeters > 0.0 || history.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Surface, RoundedCornerShape(18.dp))
+                    .padding(16.dp)
+            ) {
+                Text("QUILOMETRAGEM", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                if (tripDistanceMeters > 0.0) {
+                    Text(
+                        "${formatKm(tripDistanceMeters)} rodados na rota atual",
+                        color = White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+                history.firstOrNull()?.let { latest ->
+                    Text(
+                        "Última concluída: ${latest.atId} • ${formatKm(latest.distanceMeters)}",
+                        color = Muted,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
         Spacer(Modifier.weight(1f))
+        Text("R$ 5 por rota • pagamento PIX", color = Muted, fontSize = 11.sp)
+        Spacer(Modifier.height(4.dp))
         Text("⚙ Configurações", color = Muted, fontSize = 12.sp)
         Spacer(Modifier.height(8.dp))
     }
@@ -584,13 +615,20 @@ private fun RouteScreen(
     geocodeProgress: Pair<Int, Int>?,
     activities: List<ActivityEntry>,
     spxStatus: SpxStatus,
+    tripActive: Boolean,
+    tripStartedAt: Long,
+    tripDistanceMeters: Double,
+    tripPoints: List<TripPoint>,
+    courierLocation: GeoPoint?,
     onHome: () -> Unit,
     onExpandMap: () -> Unit,
     onStart: () -> Unit,
+    onFinish: () -> Unit,
     onPause: (String) -> Unit,
     onResume: () -> Unit,
     onScan: () -> Unit,
     onNavigate: (RouteStop) -> Unit,
+    onWaze: (RouteStop) -> Unit,
     onRetry: (String) -> Unit,
     onSpx: () -> Unit
 ) {
@@ -655,7 +693,9 @@ private fun RouteScreen(
                     activePackages = activePackages,
                     stops = stops.size,
                     runState = runState,
-                    pauseReason = pauseReason
+                    pauseReason = pauseReason,
+                    tripDistanceMeters = tripDistanceMeters,
+                    tripStartedAt = tripStartedAt
                 )
             }
 
@@ -676,7 +716,9 @@ private fun RouteScreen(
                     RouteMapView(
                         stops = stops,
                         coordinates = coordinates,
-                        modifier = Modifier.fillMaxWidth().height(210.dp).background(Surface2, RoundedCornerShape(14.dp))
+                        courierLocation = courierLocation,
+                        trackPoints = tripPoints,
+                        modifier = Modifier.fillMaxWidth().height(230.dp).background(Surface2, RoundedCornerShape(14.dp))
                     )
                     geocodeProgress?.let { (done, total) ->
                         Text("Preparando endereços: $done/$total", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(8.dp))
@@ -693,8 +735,11 @@ private fun RouteScreen(
                     OperationCard(
                         runState = runState,
                         nextStop = nextStop,
+                        tripActive = tripActive,
                         onScan = onScan,
                         onNavigate = { nextStop?.let(onNavigate) },
+                        onWaze = { nextStop?.let(onWaze) },
+                        onFinish = onFinish,
                         onPause = { showPauseDialog = true },
                         onResume = onResume
                     )
@@ -737,7 +782,8 @@ private fun RouteScreen(
                     pkg = pkg,
                     status = statuses[pkg.spxTn] ?: PackageStatus.PENDING,
                     preference = preferences[pkg.spxTn],
-                    onNavigate = { WazeLauncher.navigate(context, pkg.navigationAddress) },
+                    onMap = onExpandMap,
+                    onWaze = { WazeLauncher.navigate(context, pkg.navigationAddress) },
                     onRetry = { onRetry(pkg.spxTn) }
                 )
             }
@@ -773,7 +819,9 @@ private fun RouteSummary(
     activePackages: Int,
     stops: Int,
     runState: RouteRunState,
-    pauseReason: String
+    pauseReason: String,
+    tripDistanceMeters: Double,
+    tripStartedAt: Long
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().background(Surface, RoundedCornerShape(18.dp)).padding(16.dp)
@@ -781,6 +829,21 @@ private fun RouteSummary(
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             MetricBox(Modifier.weight(1f), pending.toString(), "Para entregar", Cyan)
             MetricBox(Modifier.weight(1f), occurrences.toString(), "Ocorrências", Orange)
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            MetricBox(
+                Modifier.weight(1f),
+                formatKm(tripDistanceMeters),
+                "Km rodados",
+                Success
+            )
+            MetricBox(
+                Modifier.weight(1f),
+                formatDurationFrom(tripStartedAt),
+                "Tempo de rota",
+                Blue
+            )
         }
         Spacer(Modifier.height(10.dp))
         Text("$activePackages pedidos ativos • $stops paradas físicas", color = Muted, fontSize = 12.sp)
@@ -804,8 +867,11 @@ private fun MetricBox(modifier: Modifier, value: String, label: String, accent: 
 private fun OperationCard(
     runState: RouteRunState,
     nextStop: RouteStop?,
+    tripActive: Boolean,
     onScan: () -> Unit,
     onNavigate: () -> Unit,
+    onWaze: () -> Unit,
+    onFinish: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit
 ) {
@@ -827,11 +893,23 @@ private fun OperationCard(
         Spacer(Modifier.height(14.dp))
         if (runState == RouteRunState.PAUSED) {
             ActionButton("RETOMAR", Success, onResume)
+            Spacer(Modifier.height(8.dp))
+            ActionButton("ENCERRAR ROTA", Danger, onFinish)
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SmallButton(Modifier.weight(1f), "📷 BIPAR", Orange, onScan)
-                SmallButton(Modifier.weight(1f), "NAVEGAR", Blue, onNavigate)
+                SmallButton(Modifier.weight(1f), "📷 LER", Orange, onScan)
+                SmallButton(Modifier.weight(1f), "MAPA", Blue, onNavigate)
                 SmallButton(Modifier.weight(1f), "PAUSAR", Surface2, onPause)
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SmallButton(Modifier.weight(1f), "ABRIR NO WAZE", Surface2, onWaze)
+                SmallButton(
+                    Modifier.weight(1f),
+                    if (tripActive) "ENCERRAR ROTA" else "FINALIZAR",
+                    Danger,
+                    onFinish
+                )
             }
         }
     }
@@ -842,7 +920,8 @@ private fun PackageCard(
     pkg: RomaneioPackage,
     status: PackageStatus,
     preference: ClientPreference?,
-    onNavigate: () -> Unit,
+    onMap: () -> Unit,
+    onWaze: () -> Unit,
     onRetry: () -> Unit
 ) {
     val accent = when (status) {
@@ -871,10 +950,12 @@ private fun PackageCard(
 
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SmallButton(Modifier.weight(1f), "NAVEGAR", Blue, onNavigate)
-            if (status == PackageStatus.OCCURRENCE || status == PackageStatus.POSSIBLE_OCCURRENCE) {
-                SmallButton(Modifier.weight(1f), "TENTAR ENTREGA", Surface2, onRetry)
-            }
+            SmallButton(Modifier.weight(1f), "VER NO MAPA", Blue, onMap)
+            SmallButton(Modifier.weight(1f), "WAZE", Surface2, onWaze)
+        }
+        if (status == PackageStatus.OCCURRENCE || status == PackageStatus.POSSIBLE_OCCURRENCE) {
+            Spacer(Modifier.height(8.dp))
+            SmallButton(Modifier.fillMaxWidth(), "TENTAR ENTREGA", Surface2, onRetry)
         }
     }
 }
@@ -884,6 +965,10 @@ private fun FullMapScreen(
     route: RomaneioRoute?,
     stops: List<RouteStop>,
     coordinates: Map<String, GeoPoint>,
+    courierLocation: GeoPoint?,
+    tripPoints: List<TripPoint>,
+    tripDistanceMeters: Double,
+    tripStartedAt: Long,
     geocodeProgress: Pair<Int, Int>?,
     onClose: () -> Unit
 ) {
@@ -896,15 +981,21 @@ private fun FullMapScreen(
         ) {
             Text("‹", color = Cyan, fontSize = 30.sp, modifier = Modifier.clickable(onClick = onClose))
             Spacer(Modifier.size(8.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text("MAPA DA ROTA", color = White, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
                 Text(route?.atId.orEmpty(), color = Muted, fontSize = 11.sp)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(formatKm(tripDistanceMeters), color = Orange, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                Text(formatDurationFrom(tripStartedAt), color = Muted, fontSize = 10.sp)
             }
         }
 
         RouteMapView(
             stops = stops,
             coordinates = coordinates,
+            courierLocation = courierLocation,
+            trackPoints = tripPoints,
             modifier = Modifier.fillMaxSize()
         )
 
