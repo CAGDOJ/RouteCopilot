@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#2563eb">
+<title>RouteCopilot — Gestão inteligente de rotas</title>
+<meta name="description" content="RouteCopilot auxilia entregadores a organizar rotas, acompanhar quilômetros e reduzir tempo perdido. Pagamento por rota via PIX.">
+<style>
+:root{
+  --bg:#f6f8fc;--surface:#fff;--ink:#0f172a;--muted:#64748b;--blue:#2563eb;
+  --cyan:#0284c7;--orange:#f97316;--green:#16a34a;--red:#dc2626;--line:#d8e0ea;
+}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+a{color:inherit;text-decoration:none}.wrap{max-width:1120px;margin:auto;padding:0 22px}
+nav{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.nav{height:70px;display:flex;align-items:center;gap:28px}.brand{font-weight:900;font-size:20px;letter-spacing:-.6px;color:var(--blue)}.brand b{color:var(--orange)}
+.links{margin-left:auto;display:flex;gap:20px;color:var(--muted);font-size:14px}.btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:14px;padding:14px 20px;font-weight:800;cursor:pointer}
+.btn-primary{background:var(--orange);color:white}.btn-blue{background:var(--blue);color:white}.btn-soft{background:#eef3f8;color:var(--ink)}
+.hero{padding:88px 0 58px}.hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:54px;align-items:center}
+.kicker{display:inline-flex;background:#eaf2ff;color:var(--blue);padding:7px 11px;border-radius:999px;font-size:12px;font-weight:800}
+h1{font-size:clamp(42px,7vw,72px);line-height:.98;letter-spacing:-3px;margin:18px 0 22px}.lead{font-size:20px;color:var(--muted);max-width:650px}
+.cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:28px}.mini{font-size:13px;color:var(--muted);margin-top:14px}
+.phone{background:var(--surface);border:1px solid var(--line);border-radius:34px;padding:18px;box-shadow:0 26px 70px rgba(37,99,235,.14)}
+.screen{background:linear-gradient(180deg,#fff,#f6f8fc);border-radius:24px;padding:18px;min-height:520px;border:1px solid #e5eaf0}
+.top{display:flex;justify-content:space-between;align-items:center}.logo{width:48px;height:48px;border-radius:15px;background:#eef3f8;display:grid;place-items:center;color:var(--orange);font-weight:950;font-size:20px}
+.badge{font-size:11px;background:#dcfce7;color:#166534;padding:6px 9px;border-radius:999px;font-weight:800}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px;margin-top:14px}
+.metric{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric div{background:#f1f5f9;border-radius:14px;padding:14px}.metric strong{display:block;font-size:22px;color:var(--blue)}.map{height:170px;border-radius:16px;background:linear-gradient(135deg,#dbeafe,#f1f5f9);position:relative;overflow:hidden;margin-top:12px}.route{position:absolute;inset:30px 20px;border:5px solid var(--blue);border-color:transparent transparent var(--blue) var(--blue);border-radius:50%;transform:rotate(-12deg)}.dot{position:absolute;width:16px;height:16px;border-radius:50%;background:var(--orange);border:4px solid white;box-shadow:0 2px 8px #0003;left:48%;top:43%}
+section{padding:66px 0}.section-title{font-size:36px;letter-spacing:-1.4px;margin:0 0 12px}.section-lead{color:var(--muted);max-width:760px;margin:0 0 30px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.feature{background:#fff;border:1px solid var(--line);border-radius:20px;padding:22px}.feature h3{margin:10px 0 8px}.icon{width:42px;height:42px;border-radius:13px;background:#eef3ff;display:grid;place-items:center;font-size:20px}
+.price{background:#0f172a;color:white;border-radius:28px;padding:34px;display:grid;grid-template-columns:1fr auto;gap:30px;align-items:center}.price small{color:#94a3b8}.price strong{font-size:52px;letter-spacing:-2px}.price em{font-style:normal;color:#fdba74}.pix{display:inline-flex;gap:8px;align-items:center;background:#123b35;color:#86efac;border-radius:999px;padding:7px 11px;font-size:12px;font-weight:800}
+.steps{counter-reset:s}.step{display:grid;grid-template-columns:54px 1fr;gap:16px;align-items:start;margin:20px 0}.step:before{counter-increment:s;content:counter(s);width:46px;height:46px;border-radius:15px;background:var(--blue);color:#fff;display:grid;place-items:center;font-weight:900}
+.faq details{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin:10px 0}.faq summary{cursor:pointer;font-weight:800}
+footer{padding:42px 0 70px;color:var(--muted);font-size:13px}
+@media(max-width:860px){.hero-grid,.grid3,.price{grid-template-columns:1fr}.links{display:none}.hero{padding-top:55px}h1{letter-spacing:-2px}.phone{max-width:520px;margin:auto}.price strong{font-size:44px}}
+</style>
+</head>
+<body>
+<nav><div class="wrap nav"><a class="brand" href="#">ROUTE<b>COPILOT</b></a><div class="links"><a href="#recursos">Recursos</a><a href="#preco">Preço</a><a href="#instalar">Instalação</a><a href="#faq">Dúvidas</a></div><a class="btn btn-blue" href="https://github.com/CAGDOJ/RouteCopilot/releases/latest">Baixar APK</a></div></nav>
+
+<header class="hero">
+<div class="wrap hero-grid">
+  <div>
+    <span class="kicker">ANDROID • ROTAS DE ENTREGA</span>
+    <h1>Menos improviso.<br>Mais controle da rota.</h1>
+    <p class="lead">Mapa próprio, sequência de entregas, quilometragem real desde o hub, integração assistida com SPX e histórico por rota.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/CAGDOJ/RouteCopilot/releases/latest">BAIXAR ROUTECOPILOT</a>
+      <a class="btn btn-soft" href="#instalar">COMO INSTALAR</a>
+    </div>
+    <p class="mini">Pagamento por uso • somente PIX • sem cobrança quando não existe AT ativa.</p>
+  </div>
+  <div class="phone">
+    <div class="screen">
+      <div class="top"><div class="logo">R↗</div><span class="badge">● EM ROTA</span></div>
+      <h2 style="margin-bottom:2px">AT ativa</h2><div style="color:var(--muted);font-size:13px">Operação acompanhada pelo RouteCopilot</div>
+      <div class="card">
+        <div class="metric">
+          <div><strong>31,6 km</strong><span>rodados</span></div>
+          <div><strong>03h18</strong><span>tempo de rota</span></div>
+        </div>
+        <div class="map"><div class="route"></div><div class="dot"></div></div>
+      </div>
+      <div class="card"><b>Próxima parada</b><p style="margin:6px 0;color:var(--muted)">Mapa interno para acompanhar a sequência. Waze continua opcional.</p><button class="btn btn-blue" style="width:100%">ABRIR MAPA DA ROTA</button></div>
+    </div>
+  </div>
+</div>
+</header>
+
+<section id="recursos"><div class="wrap">
+  <h2 class="section-title">Feito para a operação real</h2>
+  <p class="section-lead">O RouteCopilot é um aplicativo auxiliar. As confirmações oficiais de entrega e autenticação continuam sendo realizadas no SPX.</p>
+  <div class="grid3">
+    <div class="feature"><div class="icon">🗺️</div><h3>Mapa próprio</h3><p>Paradas, motorista, rota planejada e trajeto efetivamente percorrido na mesma tela.</p></div>
+    <div class="feature"><div class="icon">📏</div><h3>Km reais</h3><p>Registra a quilometragem desde o início no hub até o encerramento da rota.</p></div>
+    <div class="feature"><div class="icon">📦</div><h3>AT e pedidos</h3><p>Reconhece o estado do SPX e não cobra quando não há uma AT ativa.</p></div>
+    <div class="feature"><div class="icon">📊</div><h3>Histórico</h3><p>Guarda AT, início, fim, quilômetros, entregas e ocorrências de rotas concluídas.</p></div>
+    <div class="feature"><div class="icon">🧭</div><h3>Waze opcional</h3><p>O mapa principal fica dentro do RouteCopilot. O Waze aparece apenas como alternativa externa.</p></div>
+    <div class="feature"><div class="icon">🔒</div><h3>Privacidade</h3><p>O app não deve capturar senha, OTP, cookie ou autenticação facial do SPX.</p></div>
+  </div>
+</div></section>
+
+<section id="preco"><div class="wrap">
+  <div class="price">
+    <div>
+      <span class="pix">✓ PAGAMENTO SOMENTE VIA PIX</span>
+      <h2 style="font-size:34px;margin:16px 0 6px">Preço simples por rota</h2>
+      <p style="color:#cbd5e1;max-width:650px">Uma AT nova validada consome 1 crédito. Reabrir a mesma AT não cobra novamente. Abrir o SPX sem rota ativa também não cobra.</p>
+      <small>A confirmação do PIX é automática pelo servidor quando a integração financeira estiver configurada.</small>
+    </div>
+    <div><strong>R$ 5</strong><br><em>por rota</em></div>
+  </div>
+</div></section>
+
+<section id="instalar"><div class="wrap">
+  <h2 class="section-title">Como instalar</h2>
+  <p class="section-lead">A versão Android é distribuída por APK durante a fase de testes e validação comercial.</p>
+  <div class="step"><div><b>Baixe o APK</b><br><span style="color:var(--muted)">Use o botão de download desta página para abrir a versão publicada no GitHub Releases.</span></div></div>
+  <div class="step"><div><b>Abra o arquivo no Android</b><br><span style="color:var(--muted)">Se o sistema solicitar, autorize a instalação dessa fonte. Essa decisão é sempre do usuário.</span></div></div>
+  <div class="step"><div><b>Ative as permissões explicadas pelo app</b><br><span style="color:var(--muted)">Localização registra o trajeto; Acessibilidade auxilia a leitura das telas autorizadas do SPX.</span></div></div>
+  <div class="step"><div><b>Sincronize sua rota</b><br><span style="color:var(--muted)">Sem AT ativa, nenhum crédito deve ser consumido.</span></div></div>
+</div></section>
+
+<section id="faq" class="faq"><div class="wrap">
+  <h2 class="section-title">Perguntas frequentes</h2>
+  <details><summary>O pagamento é por assinatura?</summary><p>Não. O modelo inicial é por créditos de rota. Cada nova AT validada utiliza um crédito.</p></details>
+  <details><summary>Aceita cartão?</summary><p>Não. O modelo comercial definido para esta versão usa somente PIX.</p></details>
+  <details><summary>O mapa abre o Waze?</summary><p>O mapa principal é interno. O Waze é uma opção separada para quem quiser navegação externa.</p></details>
+  <details><summary>O RouteCopilot substitui o SPX?</summary><p>Não. Ele é auxiliar. Login, autenticação e registro oficial de Entregue/Ocorrência permanecem no SPX.</p></details>
+</div></section>
+
+<footer><div class="wrap"><b>RouteCopilot</b><br>Produto em validação. Antes de distribuição ampla, revisar política de privacidade, termos, requisitos da loja e tratamento de dados.</div></footer>
+</body>
+</html>
