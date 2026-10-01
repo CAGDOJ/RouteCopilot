@@ -1,0 +1,54 @@
+ROUTECOPILOT - CONFIGURAÇÃO DO BACKEND COMERCIAL
+
+NUNCA coloque chaves reais neste arquivo nem no GitHub.
+
+Variáveis de ambiente:
+
+ASAAS_API_KEY=
+ASAAS_BASE_URL=https://api-sandbox.asaas.com/v3
+ASAAS_WEBHOOK_TOKEN=
+ROUTECOPILOT_ADMIN_TOKEN=
+ROUTECOPILOT_ALLOWED_ORIGINS=https://cagdoj.github.io,http://localhost:8000,http://127.0.0.1:8000
+
+FLUXO PIX
+
+1. Crie uma conta Sandbox no Asaas.
+2. Gere a API Key do Sandbox.
+3. Defina ASAAS_API_KEY com a chave completa.
+4. Enquanto estiver em teste, mantenha:
+   ASAAS_BASE_URL=https://api-sandbox.asaas.com/v3
+5. Configure no Asaas um webhook apontando para:
+   https://SEU_BACKEND/api/webhooks/asaas
+6. Configure um authToken forte no webhook e use o mesmo valor em:
+   ASAAS_WEBHOOK_TOKEN
+7. Configure o evento PAYMENT_RECEIVED.
+8. O RouteCopilot só credita rotas quando recebe:
+   event = PAYMENT_RECEIVED
+   billingType = PIX
+   status = RECEIVED
+
+PAINEL ADMIN
+
+Defina ROUTECOPILOT_ADMIN_TOKEN com uma senha/token longo e aleatório.
+Esse token não deve ser o mesmo token do webhook e nunca deve ser a API Key do Asaas.
+
+Depois acesse:
+https://SEU_SITE/admin.html
+
+Informe:
+- URL pública do backend
+- ROUTECOPILOT_ADMIN_TOKEN
+
+PREÇO ATUAL
+
+1 crédito de rota = R$ 5,00
+A mesma AT não consome crédito duas vezes.
+Sem AT ativa, não há consumo de crédito.
+
+PRODUÇÃO
+
+Somente depois de validar todo o fluxo em Sandbox:
+- troque ASAAS_BASE_URL para https://api.asaas.com/v3
+- use uma API Key de Produção
+- revise webhook, domínio HTTPS, política de privacidade e segurança
+- não reutilize segredo do Sandbox em Produção

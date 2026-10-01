@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RouteCopilot Admin</title>
+<style>
+:root{--bg:#f6f8fc;--surface:#fff;--ink:#0f172a;--muted:#64748b;--blue:#2563eb;--orange:#f97316;--green:#16a34a;--red:#dc2626;--line:#d8e0ea}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,system-ui,Arial,sans-serif}.wrap{max-width:1180px;margin:auto;padding:22px}
+h1{font-size:30px;letter-spacing:-1px}.bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}.bar input{flex:1;min-width:220px;padding:13px;border:1px solid var(--line);border-radius:12px;background:#fff}.btn{border:0;border-radius:12px;padding:12px 16px;font-weight:800;cursor:pointer;background:var(--blue);color:#fff}.btn.orange{background:var(--orange)}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.metric{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}.metric strong{font-size:25px;display:block}
+.panel{background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px;margin-top:18px;overflow:auto}table{width:100%;border-collapse:collapse;min-width:780px}th,td{text-align:left;border-bottom:1px solid #edf1f5;padding:11px 8px}th{color:var(--muted);font-size:11px;text-transform:uppercase}.ok{color:var(--green);font-weight:800}.pending{color:var(--orange);font-weight:800}.danger{color:var(--red);font-weight:800}.mini{padding:7px 9px;border:0;border-radius:8px;background:#eef3f8;cursor:pointer;font-weight:700}
+#msg{margin:10px 0;color:var(--muted)}@media(max-width:850px){.grid{grid-template-columns:1fr 1fr}.wrap{padding:14px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>RouteCopilot Admin</h1>
+<p style="color:var(--muted)">Gestão de usuários, créditos de rota e pagamentos PIX.</p>
+<div class="bar">
+  <input id="api" placeholder="URL do backend, ex.: https://api.seudominio.com">
+  <input id="token" type="password" placeholder="Token administrativo">
+  <button class="btn" onclick="connect()">CONECTAR</button>
+</div>
+<div id="msg">Informe o backend e o token. O token fica apenas nesta sessão do navegador.</div>
+<div class="grid">
+  <div class="metric"><small>Usuários</small><strong id="users">—</strong></div>
+  <div class="metric"><small>Ativos</small><strong id="active">—</strong></div>
+  <div class="metric"><small>Créditos vendidos</small><strong id="credits">—</strong></div>
+  <div class="metric"><small>Rotas ativadas</small><strong id="routes">—</strong></div>
+  <div class="metric"><small>Receita PIX</small><strong id="revenue">—</strong></div>
+</div>
+
+<div class="panel">
+<h2>Usuários</h2>
+<table><thead><tr><th>Nome</th><th>Contato</th><th>Créditos</th><th>Conta</th><th>Ação</th></tr></thead><tbody id="usersBody"></tbody></table>
+</div>
+
+<div class="panel">
+<h2>Pagamentos PIX</h2>
+<table><thead><tr><th>Usuário</th><th>Créditos</th><th>Valor</th><th>Status</th><th>Data</th></tr></thead><tbody id="paymentsBody"></tbody></table>
+</div>
+</div>
+<script>
+const money=cents=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((cents||0)/100);
+const dateTime=ts=>ts?new Date(ts*1000).toLocaleString('pt-BR'):'—';
+function base(){return document.getElementById('api').value.trim().replace(/\/$/,'')}
+function token(){return document.getElementById('token').value}
+async function api(path,opts={}){
+  const headers=Object.assign({'X-Admin-Token':token(),'Content-Type':'application/json'},opts.headers||{});
+  const r=await fetch(base()+path,Object.assign({},opts,{headers}));
+  if(!r.ok) throw new Error((await r.text())||('HTTP '+r.status));
+  return r.json();
+}
+async function connect(){
+  sessionStorage.setItem('rc_api',base());
+  sessionStorage.setItem('rc_token',token());
+  document.getElementById('msg').textContent='Carregando...';
+  try{
+    const [d,u,p]=await Promise.all([
+      api('/api/admin/dashboard'),
+      api('/api/admin/users'),
+      api('/api/admin/payments')
+    ]);
+    users.textContent=d.users;active.textContent=d.active_users;credits.textContent=d.sold_credits;
+    routes.textContent=d.activated_routes;revenue.textContent=money(d.revenue_cents);
+    usersBody.innerHTML=u.items.map(x=>`<tr><td><b>${esc(x.name)}</b><br><small>${esc(x.id)}</small></td><td>${esc(x.mobile_phone||'')}<br><small>${esc(x.email||'')}</small></td><td><b>${x.credits}</b></td><td class="${x.blocked?'danger':'ok'}">${x.blocked?'BLOQUEADA':'ATIVA'}</td><td><button class="mini" onclick="adjust('${x.id}',1)">+1 crédito</button> <button class="mini" onclick="adjust('${x.id}',-1)">-1</button></td></tr>`).join('');
+    paymentsBody.innerHTML=p.items.map(x=>`<tr><td>${esc(x.name)}</td><td>${x.route_credits}</td><td>${money(x.value_cents)}</td><td class="${x.status==='RECEIVED'?'ok':'pending'}">${esc(x.status)}</td><td>${dateTime(x.created_at)}</td></tr>`).join('');
+    document.getElementById('msg').textContent='Painel atualizado.';
+  }catch(e){document.getElementById('msg').textContent='Erro: '+e.message}
+}
+async function adjust(id,delta){
+  const reason=prompt('Motivo do ajuste manual de crédito:');
+  if(!reason) return;
+  try{
+    await api('/api/admin/users/'+encodeURIComponent(id)+'/credits',{method:'POST',body:JSON.stringify({delta,reason})});
+    await connect();
+  }catch(e){alert(e.message)}
+}
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+window.addEventListener('load',()=>{
+  document.getElementById('api').value=sessionStorage.getItem('rc_api')||'';
+  document.getElementById('token').value=sessionStorage.getItem('rc_token')||'';
+  if(base()&&token()) connect();
+});
+</script>
+</body>
+</html>

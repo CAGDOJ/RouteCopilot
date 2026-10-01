@@ -1,9 +1,11 @@
 package com.routecopilot
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
@@ -55,6 +57,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.routecopilot.data.ActivityEntry
 import com.routecopilot.data.ClientPreference
 import com.routecopilot.data.DeliveryPreferenceType
@@ -65,6 +68,8 @@ import com.routecopilot.data.RomaneioPackage
 import com.routecopilot.data.RomaneioRepository
 import com.routecopilot.data.RomaneioRoute
 import com.routecopilot.data.RomaneioSession
+import com.routecopilot.data.RouteHistoryEntry
+import com.routecopilot.data.RouteHistoryStore
 import com.routecopilot.data.RouteLogic
 import com.routecopilot.data.RouteRunState
 import com.routecopilot.data.RouteStop
@@ -75,23 +80,27 @@ import com.routecopilot.scanner.PackageScanner
 import com.routecopilot.spx.SpxBridge
 import com.routecopilot.spx.SpxSessionState
 import com.routecopilot.spx.SpxStatus
+import com.routecopilot.tracking.CourierTrackingService
+import com.routecopilot.tracking.RouteTripTracker
+import com.routecopilot.tracking.TripPoint
 import com.routecopilot.ui.theme.RouteCopilotTheme
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val Background = Color(0xFF08111F)
-private val Surface = Color(0xFF111C2E)
-private val Surface2 = Color(0xFF162338)
+private val Background = Color(0xFFF6F8FC)
+private val Surface = Color(0xFFFFFFFF)
+private val Surface2 = Color(0xFFEEF3F8)
 private val Blue = Color(0xFF2563EB)
-private val Cyan = Color(0xFF38BDF8)
+private val Cyan = Color(0xFF0284C7)
 private val Orange = Color(0xFFF97316)
-private val White = Color(0xFFF8FAFC)
-private val Muted = Color(0xFF94A3B8)
-private val Success = Color(0xFF22C55E)
+private val White = Color(0xFF0F172A)
+private val Muted = Color(0xFF64748B)
+private val Success = Color(0xFF16A34A)
 private val Warning = Color(0xFFF59E0B)
-private val Danger = Color(0xFFEF4444)
+private val Danger = Color(0xFFDC2626)
+private val OnPrimary = Color(0xFFFFFFFF)
 
 class MainActivity : ComponentActivity() {
 
@@ -102,6 +111,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         RomaneioSession.initialize(this)
+        RouteTripTracker.initialize(this)
+        RouteHistoryStore.initialize(this)
         SpxBridge.refreshPresence(this)
         accessibilityEnabled.value = isAccessibilityServiceEnabled(this)
 
@@ -144,11 +155,41 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
     val activities by RomaneioSession.activities.collectAsState()
     val spxStatus by SpxSessionState.status.collectAsState()
 
+    val tripActive by RouteTripTracker.active.collectAsState()
+    val tripStartedAt by RouteTripTracker.startedAt.collectAsState()
+    val tripDistanceMeters by RouteTripTracker.distanceMeters.collectAsState()
+    val tripPoints by RouteTripTracker.points.collectAsState()
+    val courierLocation by RouteTripTracker.currentLocation.collectAsState()
+    val history by RouteHistoryStore.entries.collectAsState()
+
     var screen by remember { mutableStateOf(if (route != null) AppScreen.ROUTE else AppScreen.HOME) }
     var folderUri by remember { mutableStateOf(RomaneioFolderStore.get(context)) }
     var coordinates by remember { mutableStateOf<Map<String, GeoPoint>>(emptyMap()) }
     var geocodeProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var scannedPackage by remember { mutableStateOf<RomaneioPackage?>(null) }
+    var pendingStartRoute by remember { mutableStateOf<RomaneioRoute?>(null) }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        val granted =
+            result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+
+        val routeToStart = pendingStartRoute
+        pendingStartRoute = null
+
+        if (granted && routeToStart != null) {
+            startTrackedRoute(context, routeToStart)
+            RomaneioSession.startDeliveries()
+        } else if (!granted) {
+            Toast.makeText(
+                context,
+                "A localização é necessária para registrar o trajeto e os quilômetros da rota.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     fun sync() {
         val uri = RomaneioFolderStore.get(context)
@@ -216,6 +257,8 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
             statuses = statuses,
             runState = runState,
             lastSync = lastSync,
+            tripDistanceMeters = tripDistanceMeters,
+            history = history,
             busy = busy,
             statusText = statusText,
             error = error,
@@ -253,9 +296,40 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
             geocodeProgress = geocodeProgress,
             activities = activities,
             spxStatus = spxStatus,
+            tripActive = tripActive,
+            tripStartedAt = tripStartedAt,
+            tripDistanceMeters = tripDistanceMeters,
+            tripPoints = tripPoints,
+            courierLocation = courierLocation,
             onHome = { screen = AppScreen.HOME },
             onExpandMap = { screen = AppScreen.MAP },
-            onStart = RomaneioSession::startDeliveries,
+            onStart = {
+                val selected = route
+                if (selected == null) {
+                    Toast.makeText(context, "Nenhuma rota carregada.", Toast.LENGTH_SHORT).show()
+                } else if (hasLocationPermission(context)) {
+                    startTrackedRoute(context, selected)
+                    RomaneioSession.startDeliveries()
+                } else {
+                    pendingStartRoute = selected
+                    locationPermissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                }
+            },
+            onFinish = {
+                val selected = route
+                if (selected != null) {
+                    finishTrackedRoute(
+                        context = context,
+                        route = selected,
+                        statuses = statuses
+                    )
+                }
+            },
             onPause = RomaneioSession::pause,
             onResume = RomaneioSession::resume,
             onScan = {
@@ -265,9 +339,12 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
                     onFound = { scannedPackage = it }
                 )
             },
-            onNavigate = { stop ->
+            onNavigate = { screen = AppScreen.MAP },
+            onWaze = { stop ->
                 val pkg = stop.activePackages.firstOrNull()
-                if (pkg != null) WazeLauncher.navigate(context, pkg.navigationAddress)
+                if (pkg != null) {
+                    WazeLauncher.navigate(context, pkg.navigationAddress)
+                }
             },
             onRetry = RomaneioSession::retryDelivery,
             onSpx = {
@@ -280,6 +357,10 @@ private fun RouteCopilotApp(accessibilityEnabled: Boolean) {
             route = route,
             stops = activeStops,
             coordinates = coordinates,
+            courierLocation = courierLocation,
+            tripPoints = tripPoints,
+            tripDistanceMeters = tripDistanceMeters,
+            tripStartedAt = tripStartedAt,
             geocodeProgress = geocodeProgress,
             onClose = { screen = AppScreen.ROUTE }
         )
@@ -315,6 +396,8 @@ private fun HomeScreen(
     statuses: Map<String, PackageStatus>,
     runState: RouteRunState,
     lastSync: Long,
+    tripDistanceMeters: Double,
+    history: List<RouteHistoryEntry>,
     busy: Boolean,
     statusText: String,
     error: String?,
@@ -417,7 +500,36 @@ private fun HomeScreen(
             )
         }
 
+        if (tripDistanceMeters > 0.0 || history.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Surface, RoundedCornerShape(18.dp))
+                    .padding(16.dp)
+            ) {
+                Text("QUILOMETRAGEM", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                if (tripDistanceMeters > 0.0) {
+                    Text(
+                        "${formatKm(tripDistanceMeters)} rodados na rota atual",
+                        color = White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+                history.firstOrNull()?.let { latest ->
+                    Text(
+                        "Última concluída: ${latest.atId} • ${formatKm(latest.distanceMeters)}",
+                        color = Muted,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
         Spacer(Modifier.weight(1f))
+        Text("R$ 5 por rota • pagamento PIX", color = Muted, fontSize = 11.sp)
+        Spacer(Modifier.height(4.dp))
         Text("⚙ Configurações", color = Muted, fontSize = 12.sp)
         Spacer(Modifier.height(8.dp))
     }
@@ -503,13 +615,20 @@ private fun RouteScreen(
     geocodeProgress: Pair<Int, Int>?,
     activities: List<ActivityEntry>,
     spxStatus: SpxStatus,
+    tripActive: Boolean,
+    tripStartedAt: Long,
+    tripDistanceMeters: Double,
+    tripPoints: List<TripPoint>,
+    courierLocation: GeoPoint?,
     onHome: () -> Unit,
     onExpandMap: () -> Unit,
     onStart: () -> Unit,
+    onFinish: () -> Unit,
     onPause: (String) -> Unit,
     onResume: () -> Unit,
     onScan: () -> Unit,
     onNavigate: (RouteStop) -> Unit,
+    onWaze: (RouteStop) -> Unit,
     onRetry: (String) -> Unit,
     onSpx: () -> Unit
 ) {
@@ -574,7 +693,9 @@ private fun RouteScreen(
                     activePackages = activePackages,
                     stops = stops.size,
                     runState = runState,
-                    pauseReason = pauseReason
+                    pauseReason = pauseReason,
+                    tripDistanceMeters = tripDistanceMeters,
+                    tripStartedAt = tripStartedAt
                 )
             }
 
@@ -595,7 +716,9 @@ private fun RouteScreen(
                     RouteMapView(
                         stops = stops,
                         coordinates = coordinates,
-                        modifier = Modifier.fillMaxWidth().height(210.dp).background(Surface2, RoundedCornerShape(14.dp))
+                        courierLocation = courierLocation,
+                        trackPoints = tripPoints,
+                        modifier = Modifier.fillMaxWidth().height(230.dp).background(Surface2, RoundedCornerShape(14.dp))
                     )
                     geocodeProgress?.let { (done, total) ->
                         Text("Preparando endereços: $done/$total", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(8.dp))
@@ -612,8 +735,11 @@ private fun RouteScreen(
                     OperationCard(
                         runState = runState,
                         nextStop = nextStop,
+                        tripActive = tripActive,
                         onScan = onScan,
                         onNavigate = { nextStop?.let(onNavigate) },
+                        onWaze = { nextStop?.let(onWaze) },
+                        onFinish = onFinish,
                         onPause = { showPauseDialog = true },
                         onResume = onResume
                     )
@@ -656,7 +782,8 @@ private fun RouteScreen(
                     pkg = pkg,
                     status = statuses[pkg.spxTn] ?: PackageStatus.PENDING,
                     preference = preferences[pkg.spxTn],
-                    onNavigate = { WazeLauncher.navigate(context, pkg.navigationAddress) },
+                    onMap = onExpandMap,
+                    onWaze = { WazeLauncher.navigate(context, pkg.navigationAddress) },
                     onRetry = { onRetry(pkg.spxTn) }
                 )
             }
@@ -692,7 +819,9 @@ private fun RouteSummary(
     activePackages: Int,
     stops: Int,
     runState: RouteRunState,
-    pauseReason: String
+    pauseReason: String,
+    tripDistanceMeters: Double,
+    tripStartedAt: Long
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().background(Surface, RoundedCornerShape(18.dp)).padding(16.dp)
@@ -700,6 +829,21 @@ private fun RouteSummary(
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             MetricBox(Modifier.weight(1f), pending.toString(), "Para entregar", Cyan)
             MetricBox(Modifier.weight(1f), occurrences.toString(), "Ocorrências", Orange)
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            MetricBox(
+                Modifier.weight(1f),
+                formatKm(tripDistanceMeters),
+                "Km rodados",
+                Success
+            )
+            MetricBox(
+                Modifier.weight(1f),
+                formatDurationFrom(tripStartedAt),
+                "Tempo de rota",
+                Blue
+            )
         }
         Spacer(Modifier.height(10.dp))
         Text("$activePackages pedidos ativos • $stops paradas físicas", color = Muted, fontSize = 12.sp)
@@ -723,8 +867,11 @@ private fun MetricBox(modifier: Modifier, value: String, label: String, accent: 
 private fun OperationCard(
     runState: RouteRunState,
     nextStop: RouteStop?,
+    tripActive: Boolean,
     onScan: () -> Unit,
     onNavigate: () -> Unit,
+    onWaze: () -> Unit,
+    onFinish: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit
 ) {
@@ -746,11 +893,23 @@ private fun OperationCard(
         Spacer(Modifier.height(14.dp))
         if (runState == RouteRunState.PAUSED) {
             ActionButton("RETOMAR", Success, onResume)
+            Spacer(Modifier.height(8.dp))
+            ActionButton("ENCERRAR ROTA", Danger, onFinish)
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SmallButton(Modifier.weight(1f), "📷 BIPAR", Orange, onScan)
-                SmallButton(Modifier.weight(1f), "NAVEGAR", Blue, onNavigate)
+                SmallButton(Modifier.weight(1f), "📷 LER", Orange, onScan)
+                SmallButton(Modifier.weight(1f), "MAPA", Blue, onNavigate)
                 SmallButton(Modifier.weight(1f), "PAUSAR", Surface2, onPause)
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SmallButton(Modifier.weight(1f), "ABRIR NO WAZE", Surface2, onWaze)
+                SmallButton(
+                    Modifier.weight(1f),
+                    if (tripActive) "ENCERRAR ROTA" else "FINALIZAR",
+                    Danger,
+                    onFinish
+                )
             }
         }
     }
@@ -761,7 +920,8 @@ private fun PackageCard(
     pkg: RomaneioPackage,
     status: PackageStatus,
     preference: ClientPreference?,
-    onNavigate: () -> Unit,
+    onMap: () -> Unit,
+    onWaze: () -> Unit,
     onRetry: () -> Unit
 ) {
     val accent = when (status) {
@@ -790,10 +950,12 @@ private fun PackageCard(
 
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SmallButton(Modifier.weight(1f), "NAVEGAR", Blue, onNavigate)
-            if (status == PackageStatus.OCCURRENCE || status == PackageStatus.POSSIBLE_OCCURRENCE) {
-                SmallButton(Modifier.weight(1f), "TENTAR ENTREGA", Surface2, onRetry)
-            }
+            SmallButton(Modifier.weight(1f), "VER NO MAPA", Blue, onMap)
+            SmallButton(Modifier.weight(1f), "WAZE", Surface2, onWaze)
+        }
+        if (status == PackageStatus.OCCURRENCE || status == PackageStatus.POSSIBLE_OCCURRENCE) {
+            Spacer(Modifier.height(8.dp))
+            SmallButton(Modifier.fillMaxWidth(), "TENTAR ENTREGA", Surface2, onRetry)
         }
     }
 }
@@ -803,6 +965,10 @@ private fun FullMapScreen(
     route: RomaneioRoute?,
     stops: List<RouteStop>,
     coordinates: Map<String, GeoPoint>,
+    courierLocation: GeoPoint?,
+    tripPoints: List<TripPoint>,
+    tripDistanceMeters: Double,
+    tripStartedAt: Long,
     geocodeProgress: Pair<Int, Int>?,
     onClose: () -> Unit
 ) {
@@ -815,15 +981,21 @@ private fun FullMapScreen(
         ) {
             Text("‹", color = Cyan, fontSize = 30.sp, modifier = Modifier.clickable(onClick = onClose))
             Spacer(Modifier.size(8.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text("MAPA DA ROTA", color = White, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
                 Text(route?.atId.orEmpty(), color = Muted, fontSize = 11.sp)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(formatKm(tripDistanceMeters), color = Orange, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                Text(formatDurationFrom(tripStartedAt), color = Muted, fontSize = 10.sp)
             }
         }
 
         RouteMapView(
             stops = stops,
             coordinates = coordinates,
+            courierLocation = courierLocation,
+            trackPoints = tripPoints,
             modifier = Modifier.fillMaxSize()
         )
 
@@ -958,7 +1130,10 @@ private fun ActionButton(
         onClick = onClick,
         enabled = enabled,
         shape = RoundedCornerShape(16.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = White)
+        colors = ButtonDefaults.buttonColors(
+            containerColor = color,
+            contentColor = if (color == Surface2) White else OnPrimary
+        )
     ) {
         Text(text, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     }
@@ -975,7 +1150,10 @@ private fun SmallButton(
         modifier = modifier.height(46.dp),
         onClick = onClick,
         shape = RoundedCornerShape(13.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = White),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = color,
+            contentColor = if (color == Surface2) White else OnPrimary
+        ),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp)
     ) {
         Text(text, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
@@ -1000,6 +1178,97 @@ private fun preferenceLabel(pref: ClientPreference): String = when (pref.type) {
 
 private fun formatTime(timestamp: Long): String =
     SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date(timestamp))
+
+private fun formatKm(distanceMeters: Double): String =
+    String.format(Locale("pt", "BR"), "%.1f km", distanceMeters / 1000.0)
+
+private fun formatDurationFrom(startedAt: Long): String {
+    if (startedAt <= 0L) return "00h00"
+
+    val finishedAt = RouteTripTracker.finishedAt.value
+    val end = if (finishedAt > 0L) finishedAt else System.currentTimeMillis()
+    val totalMinutes = ((end - startedAt).coerceAtLeast(0L) / 60_000L)
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+
+    return String.format(Locale.ROOT, "%02dh%02d", hours, minutes)
+}
+
+private fun hasLocationPermission(context: Context): Boolean {
+    val fine = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+
+    val coarse = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+
+    return fine || coarse
+}
+
+private fun startTrackedRoute(
+    context: Context,
+    route: RomaneioRoute
+) {
+    RouteTripTracker.startRoute(
+        context = context,
+        atId = route.atId
+    )
+
+    ContextCompat.startForegroundService(
+        context,
+        Intent(context, CourierTrackingService::class.java)
+    )
+}
+
+private fun finishTrackedRoute(
+    context: Context,
+    route: RomaneioRoute,
+    statuses: Map<String, PackageStatus>
+) {
+    val finishedAt = System.currentTimeMillis()
+    val startedAt = RouteTripTracker.startedAt.value
+    val distanceMeters = RouteTripTracker.distanceMeters.value
+
+    val delivered = route.packages.count {
+        statuses[it.spxTn] == PackageStatus.DELIVERED
+    }
+
+    val occurrences = route.packages.count {
+        val status = statuses[it.spxTn]
+        status == PackageStatus.OCCURRENCE ||
+            status == PackageStatus.POSSIBLE_OCCURRENCE
+    }
+
+    RouteTripTracker.finishRoute(context)
+
+    RouteHistoryStore.record(
+        context = context,
+        entry = RouteHistoryEntry(
+            atId = route.atId,
+            startedAt = startedAt,
+            finishedAt = finishedAt,
+            distanceMeters = distanceMeters,
+            totalPackages = route.packages.size,
+            deliveredPackages = delivered,
+            occurrences = occurrences
+        )
+    )
+
+    context.stopService(
+        Intent(context, CourierTrackingService::class.java)
+    )
+
+    RomaneioSession.finishDeliveries()
+
+    Toast.makeText(
+        context,
+        "Rota encerrada: ${formatKm(distanceMeters)} registrados.",
+        Toast.LENGTH_LONG
+    ).show()
+}
 
 private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
