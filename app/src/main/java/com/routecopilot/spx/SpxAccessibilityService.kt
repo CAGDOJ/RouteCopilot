@@ -64,6 +64,9 @@ class SpxAccessibilityService :
     private var returnedInitialSync =
         false
 
+    private var returnedNoActiveRoute =
+        false
+
     private var lastAt:
         String? = null
 
@@ -266,6 +269,52 @@ class SpxAccessibilityService :
             )
         }
 
+        if (
+            snapshot.noActiveRoute &&
+            snapshot.at == null &&
+            snapshot.trackingCodes.isEmpty()
+        ) {
+
+            SpxSessionState.updateSyncMode(
+                SpxSyncMode.IDLE
+            )
+
+            SpxSessionState.update(
+                SpxStatus.CONNECTED,
+                "Nenhuma AT associada no SPX."
+            )
+
+            Log.d(
+                TAG,
+                "NO_ACTIVE_ROUTE | EM_ROTA=0 | AT=NONE"
+            )
+
+            if (
+                !returnedNoActiveRoute
+            ) {
+
+                returnedNoActiveRoute =
+                    true
+
+                Toast.makeText(
+                    applicationContext,
+                    "Nenhuma AT associada no SPX.",
+                    Toast.LENGTH_SHORT
+                ).show()
+
+                returnToCopilot(
+                    reason = "NO_ACTIVE_ROUTE",
+                    openRouteManagement = false,
+                    monitoringAfterReturn = false
+                )
+            }
+
+            return
+        }
+
+        returnedNoActiveRoute =
+            false
+
         snapshot.at?.let { at ->
 
             SpxSessionState.updateAtCode(
@@ -452,7 +501,7 @@ class SpxAccessibilityService :
                                     )
 
                                     returnToCopilot(
-                                        "STATUS_UPDATED"
+                                        reason = "STATUS_UPDATED"
                                     )
                                 }
                             }
@@ -692,7 +741,7 @@ class SpxAccessibilityService :
             ).show()
 
             returnToCopilot(
-                "INITIAL_SYNC"
+                reason = "INITIAL_SYNC"
             )
         }
     }
@@ -1287,7 +1336,9 @@ class SpxAccessibilityService :
     }
 
     private fun returnToCopilot(
-        reason: String
+        reason: String,
+        openRouteManagement: Boolean = true,
+        monitoringAfterReturn: Boolean = true
     ) {
 
         SpxSessionState.updateState(
@@ -1308,7 +1359,7 @@ class SpxAccessibilityService :
 
                 putExtra(
                     "OPEN_ROUTE_MANAGEMENT",
-                    true
+                    openRouteManagement
                 )
 
                 putExtra(
@@ -1323,8 +1374,24 @@ class SpxAccessibilityService :
                 intent
             )
 
-            SpxSessionState
-                .markMonitoring()
+            if (
+                monitoringAfterReturn
+            ) {
+
+                SpxSessionState
+                    .markMonitoring()
+
+            } else {
+
+                SpxSessionState.updateSyncMode(
+                    SpxSyncMode.IDLE
+                )
+
+                SpxSessionState.update(
+                    SpxStatus.CONNECTED,
+                    "Nenhuma AT associada no SPX."
+                )
+            }
 
         } catch (
             e: Exception
