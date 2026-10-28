@@ -13,7 +13,8 @@ data class SpxScreenSnapshot(
     val neighborhood: String? = null,
     val status: DeliveryStatus? = null,
     val looksLikeLogin: Boolean = false,
-    val looksAuthenticated: Boolean = false
+    val looksAuthenticated: Boolean = false,
+    val noActiveRoute: Boolean = false
 )
 
 object SpxParser {
@@ -157,7 +158,9 @@ object SpxParser {
             looksLikeLogin =
                 looksLikeLogin(lower),
             looksAuthenticated =
-                looksAuthenticated(lower)
+                looksAuthenticated(lower),
+            noActiveRoute =
+                looksLikeNoActiveRoute(cleaned, lower)
         )
     }
 
@@ -396,5 +399,32 @@ object SpxParser {
         ).any {
             lower.contains(it)
         }
+    }
+
+    private fun looksLikeNoActiveRoute(
+        textos: List<String>,
+        lower: String
+    ): Boolean {
+
+        val emRotaZero = textos.any { texto ->
+            Regex(
+                """\bem\s*rota\s*\(\s*0\s*\)""",
+                RegexOption.IGNORE_CASE
+            ).containsMatchIn(texto)
+        } || Regex(
+            """\bem\s*rota\s*\(\s*0\s*\)""",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(lower)
+
+        if (!emRotaZero) {
+            return false
+        }
+
+        val telaDeScanner =
+            lower.contains("escanear") ||
+                lower.contains("código de barras") ||
+                lower.contains("codigo de barras")
+
+        return telaDeScanner
     }
 }

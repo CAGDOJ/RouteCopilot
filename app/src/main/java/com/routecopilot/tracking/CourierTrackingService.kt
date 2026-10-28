@@ -27,6 +27,7 @@ class CourierTrackingService : Service(), LocationListener {
         super.onCreate()
 
         RouteRepository.initialize(this)
+        RouteTripTracker.initialize(this)
         createChannel()
 
         startForeground(
@@ -97,6 +98,8 @@ class CourierTrackingService : Service(), LocationListener {
     }
 
     override fun onLocationChanged(location: Location) {
+        RouteTripTracker.recordLocation(this, location)
+
         val stops = RouteRepository.stops.value
             .sortedBy { it.copilotOrder ?: Int.MAX_VALUE }
 

@@ -13,3 +13,11 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+
+# RouteCopilot local web/backend
+backend/.venv/
+backend/__pycache__/
+backend/*.db
+client_portal/__pycache__/
+*.pyc
